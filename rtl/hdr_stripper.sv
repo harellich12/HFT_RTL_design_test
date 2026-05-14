@@ -155,12 +155,15 @@ module hdr_stripper (
                         && (current_word_cnt >= PAYLOAD_START_WORD[WORD_CNT_WIDTH-1:0])
                         && (rx_eof_valid_bytes > HDR_REM_BYTES[3:0]);
 
-        payload_data = eof_flush_r ? {SHIFT_BITS'(0), payload_tail_r}
-                                   : {rx_data[SHIFT_BITS-1:0], payload_tail_r};
         payload_valid = (eof_flush_r || normal_payload_valid) && !frame_err_active;
         payload_sof = payload_valid && !payload_started_r;
         payload_eof = payload_valid && (eof_flush_r || normal_payload_eof);
-        payload_eof_bytes = eof_flush_r ? eof_flush_bytes_r : normal_payload_eof_bytes;
+        payload_data = payload_valid
+                     ? (eof_flush_r ? {SHIFT_BITS'(0), payload_tail_r}
+                                    : {rx_data[SHIFT_BITS-1:0], payload_tail_r})
+                     : 64'h0;
+        payload_eof_bytes = payload_eof ? (eof_flush_r ? eof_flush_bytes_r : normal_payload_eof_bytes)
+                                        : 3'h0;
         frame_err = frame_err_active;
     end
 
