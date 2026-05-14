@@ -76,8 +76,8 @@ spec is, where it came from, why it matters, and how the current project address
 
 | Note | Source | Why It Matters |
 | --- | --- | --- |
-| Contains a constant-count `for` loop in `crc32_byte`. | RTL implementation and `BLOCK_CONTEXT.md`. | The original rules prohibit loops in synthesizable modules; this should be reviewed or unrolled for strict compliance. |
-| `SPEC_GAP`: admitting the SOF/preamble word into the stream. | RTL implementation. | Suppressing that word would prevent `hdr_stripper` from stripping the preamble as specified. |
+| CRC helper uses explicitly unrolled bit steps. | RTL implementation. | Satisfies the original rule prohibiting loops in synthesizable modules. |
+| SOF/preamble word is admitted into the stream. | Original `mac_shim` section. | Preserves the requirement that `mac_shim` does not strip the preamble. |
 
 ## Module Spec: `hdr_stripper`
 
@@ -257,7 +257,7 @@ gtkwave tb/hft_engine_smoke.vcd
 | Smoke tests | Present for `mac_shim`, `hdr_stripper`, `field_aligner`, `sym_id_mapper`, `risk_gate`, `pkt_formatter`, and top-level `hft_engine`. |
 | WSL flow | Present and used successfully. |
 | Spec gaps | Tracked and preserved. |
-| Strict no-loop compliance | Needs review for `mac_shim` CRC helper. |
+| Strict no-loop compliance | `mac_shim` CRC helper is unrolled; no loops are present in synthesizable RTL. |
 | Quant/strategy layer | Not part of current source spec; proposed separately in `STRATEGY_CORE_PROPOSAL.md`. |
 
 ## Remaining Recommended Work
@@ -269,7 +269,3 @@ gtkwave tb/hft_engine_smoke.vcd
 2. Resolve configuration interface gaps.
    - Source: `sym_id_mapper` and `risk_gate` original specs require reset-time configuration not present in frozen interfaces.
    - Why important: Placeholder constants are not production trading configuration.
-
-3. Review or unroll `mac_shim` CRC loop.
-   - Source: original coding rules forbid loops in synthesizable modules.
-   - Why important: Even constant loops can violate project policy or synthesis-review expectations.

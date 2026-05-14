@@ -20,7 +20,7 @@ approval.
 
 | Block | File | Status | Verification |
 | --- | --- | --- | --- |
-| `mac_shim` | `rtl/mac_shim.sv` | Implemented, has CRC/FCS logic and a `SPEC_GAP` note for SOF stream admission. Contains a constant-count `for` loop inside a CRC function, which should be reviewed against the project-level "no loops" rule. | Verilator lint-only passes. `rtl/mac_shim_assertions.sv` lint-only passes with assertions enabled. `tb/tb_mac_shim.sv` covers block-lock suppression, SOF forwarding, EOF byte count, good FCS, and bad FCS rejection. |
+| `mac_shim` | `rtl/mac_shim.sv` | Implemented, has CRC/FCS logic, forwards the SOF/preamble word as required, and explicitly unrolls CRC bit steps to satisfy the project-level no-loop rule. | Verilator lint-only passes. `rtl/mac_shim_assertions.sv` lint-only passes with assertions enabled. `tb/tb_mac_shim.sv` covers block-lock suppression, SOF forwarding, EOF byte count, good FCS, and bad FCS rejection. |
 | `hdr_stripper` | `rtl/hdr_stripper.sv` | Implemented, fixed IPv4/UDP header stripping and alignment. Has `SPEC_GAP` notes for bad-length definition and the stated 2-cycle budget conflict with in-stream preamble/header stripping. | Verilator lint-only passes. `rtl/hdr_stripper_assertions.sv` lint-only passes with assertions enabled. `tb/tb_hdr_stripper.sv` covers fixed strip/alignment, EOF behavior, EtherType/IHL/protocol errors, and short-frame error. |
 | `field_aligner` | `rtl/field_aligner.sv` | Implemented for the default fixed payload layout. Has a `SPEC_GAP` note for static offset parameters versus the frozen interface. | Verilator lint-only passes. `tb/tb_field_aligner.sv` lint-only passes. `rtl/field_aligner_assertions.sv` lint-only passes with assertions enabled. Existing VCD: `tb/field_aligner_smoke.vcd`. |
 | `sym_id_mapper` | `rtl/sym_id_mapper.sv` | Implemented as an identity/tag placeholder because reset-time serial table load pins are absent from the frozen interface. | Verilator lint-only passes. `tb/tb_sym_id_mapper.sv` lint-only passes. `rtl/sym_id_mapper_assertions.sv` lint-only passes with assertions enabled. Existing VCD: `tb/sym_id_mapper_smoke.vcd`. |
@@ -69,7 +69,6 @@ Latest WSL top-level smoke result from `tb_hft_engine`:
 Existing `// SPEC_GAP:` markers are intentional and should remain until the spec
 or interfaces are clarified:
 
-- `mac_shim`: admitting the SOF/preamble word into the stream.
 - `hdr_stripper`: numeric definition of bad length.
 - `hdr_stripper`: causal conflict between stripping preamble/header bytes and the written 2-cycle `rx_sof` to `payload_valid` budget.
 - `field_aligner`: static offset parameters exist, but there is no broader parameterized interface.
@@ -82,7 +81,6 @@ or interfaces are clarified:
 ## Next Recommended Work
 
 1. Resolve or formalize spec gaps around config/load interfaces and formatter packet schema.
-2. Review the constant-count CRC loop in `mac_shim` against the project-level no-loop rule.
 
 ## Session Checklist
 

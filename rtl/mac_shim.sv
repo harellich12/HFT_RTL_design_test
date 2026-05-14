@@ -59,18 +59,38 @@ module mac_shim (
     logic [ROLL_WIDTH-1:0] roll_b6;
     logic [ROLL_WIDTH-1:0] roll_b7;
 
+    function automatic logic [31:0] crc32_bit (
+        input logic [31:0] crc_in_bit,
+        input logic        data_bit
+    );
+        logic xor_bit;
+        begin
+            xor_bit   = crc_in_bit[31] ^ data_bit;
+            crc32_bit = {crc_in_bit[30:0], 1'b0} ^ ({32{xor_bit}} & CRC_POLY);
+        end
+    endfunction
+
     function automatic logic [31:0] crc32_byte (
-        input logic [31:0] crc_in,
+        input logic [31:0] crc_in_byte,
         input logic [7:0]  data_byte
     );
-        logic [31:0] crc;
-        logic        msb;
-        crc = crc_in;
-        for (int i = 0; i < 8; i++) begin
-            msb = crc[31] ^ data_byte[i];
-            crc = {crc[30:0], 1'b0} ^ (msb ? CRC_POLY : 32'h0);
+        logic [31:0] crc_b0;
+        logic [31:0] crc_b1;
+        logic [31:0] crc_b2;
+        logic [31:0] crc_b3;
+        logic [31:0] crc_b4;
+        logic [31:0] crc_b5;
+        logic [31:0] crc_b6;
+        begin
+            crc_b0     = crc32_bit(crc_in_byte, data_byte[0]);
+            crc_b1     = crc32_bit(crc_b0,      data_byte[1]);
+            crc_b2     = crc32_bit(crc_b1,      data_byte[2]);
+            crc_b3     = crc32_bit(crc_b2,      data_byte[3]);
+            crc_b4     = crc32_bit(crc_b3,      data_byte[4]);
+            crc_b5     = crc32_bit(crc_b4,      data_byte[5]);
+            crc_b6     = crc32_bit(crc_b5,      data_byte[6]);
+            crc32_byte = crc32_bit(crc_b6,      data_byte[7]);
         end
-        return crc;
     endfunction
 
     // Rolls one accepted data byte through a four-byte delay window. Bytes leave
@@ -197,8 +217,7 @@ module mac_shim (
                  && (fcs_depth_next == FCS_BYTES[2:0])
                  && (fcs_window_next == expected_fcs_wire_order);
 
-        // SPEC_GAP: Suppressing rx_valid while frame_active_r is low would drop the
-        // preamble/SFD word, so the SOF detection cycle is admitted into the stream.
+        // Admit the SOF cycle so hdr_stripper receives the preamble/SFD word.
         rx_valid_next = pcs_rx_valid
                      && pcs_block_lock
                      && (frame_active_r || sof_detect);
