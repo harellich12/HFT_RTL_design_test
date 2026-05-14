@@ -156,7 +156,7 @@ module tb_hdr_stripper;
                          64'h0, 1'b0, 1'b0, 1'b0, 3'h0, 1'b0);
         drive_and_expect("eth/ip0", pack8(8'h88, 8'h99, 8'hAA, 8'hBB,
                                           ethertype[15:8], ethertype[7:0],
-                                          {ihl, 4'h0}, 8'h00),
+                                          {4'h4, ihl}, 8'h00),
                          1'b1, 1'b0, 1'b0, 3'h0,
                          64'h0, 1'b0, 1'b0, 1'b0, 3'h0,
                          header_err);
