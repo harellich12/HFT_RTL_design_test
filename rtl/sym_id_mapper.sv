@@ -19,6 +19,12 @@ module sym_id_mapper #(
     input  logic        field_valid,
     input  logic        field_err,
 
+    // Off-path table load. Load entries while the datapath is quiescent.
+    input  logic [SYMBOL_ID_WIDTH-1:0]       sym_cfg_symbol_idx,
+    input  logic [64-SYMBOL_ID_WIDTH-1:0]    sym_cfg_instrument_tag,
+    input  logic                             sym_cfg_entry_valid,
+    input  logic                             sym_cfg_valid,
+
     output logic [SYMBOL_ID_WIDTH-1:0] symbol_idx,
     output logic        sym_valid,
     output logic        sym_miss,
@@ -29,7 +35,12 @@ module sym_id_mapper #(
 
     logic [SYMBOL_ID_WIDTH-1:0] symbol_idx_next;
     logic [TAG_WIDTH-1:0]       instrument_tag;
+    logic [TAG_WIDTH-1:0]       table_tag;
+    logic                       table_entry_valid;
     logic                       tag_miss;
+
+    logic [TAG_WIDTH-1:0] tag_table [SYMBOL_TABLE_DEPTH];
+    logic                 entry_valid_table [SYMBOL_TABLE_DEPTH];
 
     always_ff @(posedge clk_pcs) begin
         if (!rst_n) begin
@@ -38,6 +49,11 @@ module sym_id_mapper #(
             sym_miss   <= 1'b0;
             sym_err    <= 1'b0;
         end else begin
+            if (sym_cfg_valid) begin
+                tag_table[sym_cfg_symbol_idx]         <= sym_cfg_instrument_tag;
+                entry_valid_table[sym_cfg_symbol_idx] <= sym_cfg_entry_valid;
+            end
+
             symbol_idx <= symbol_idx_next;
             sym_valid  <= field_valid;
             sym_miss   <= field_valid && !field_err && tag_miss;
@@ -48,11 +64,13 @@ module sym_id_mapper #(
     always_comb begin
         symbol_idx_next = instrument_id[SYMBOL_ID_WIDTH-1:0];
         instrument_tag  = instrument_id[63:SYMBOL_ID_WIDTH];
+        table_tag       = tag_table[symbol_idx_next];
+        table_entry_valid = entry_valid_table[symbol_idx_next];
 
-        // SPEC_GAP: The spec requires a reset-time serial table load, but the frozen
-        // interface has no load pins. Minimum-latency placeholder is an identity map
-        // with all valid entries tagged zero; any non-zero tag is a deterministic miss.
-        tag_miss = instrument_tag != '0;
+        // SPEC_GAP: The spec calls for a reset-time serial loader but does not
+        // define its pins. This direct load port is intentionally off-path and is
+        // expected to be used only during reset/quiescent configuration.
+        tag_miss = !table_entry_valid || (instrument_tag != table_tag);
     end
 
 endmodule

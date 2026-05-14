@@ -13,6 +13,16 @@ module tb_hft_engine;
     logic        pcs_rx_valid;
     logic        pcs_block_lock;
     logic        rx_mac_fcs_valid;
+    logic [SYMBOL_ID_WIDTH-1:0]    sym_cfg_symbol_idx;
+    logic [64-SYMBOL_ID_WIDTH-1:0] sym_cfg_instrument_tag;
+    logic                          sym_cfg_entry_valid;
+    logic                          sym_cfg_valid;
+    logic [SYMBOL_ID_WIDTH-1:0]    risk_cfg_symbol_idx;
+    logic [PRICE_WIDTH-1:0]        risk_cfg_price_floor;
+    logic [PRICE_WIDTH-1:0]        risk_cfg_price_ceil;
+    logic [QTY_WIDTH-1:0]          risk_cfg_qty_max;
+    logic                          risk_cfg_valid;
+    logic                          risk_global_kill;
 
     logic [63:0] pcs_txdata;
     logic [7:0]  pcs_txctl;
@@ -51,6 +61,16 @@ module tb_hft_engine;
         .pcs_rx_valid(pcs_rx_valid),
         .pcs_block_lock(pcs_block_lock),
         .rx_mac_fcs_valid(rx_mac_fcs_valid),
+        .sym_cfg_symbol_idx(sym_cfg_symbol_idx),
+        .sym_cfg_instrument_tag(sym_cfg_instrument_tag),
+        .sym_cfg_entry_valid(sym_cfg_entry_valid),
+        .sym_cfg_valid(sym_cfg_valid),
+        .risk_cfg_symbol_idx(risk_cfg_symbol_idx),
+        .risk_cfg_price_floor(risk_cfg_price_floor),
+        .risk_cfg_price_ceil(risk_cfg_price_ceil),
+        .risk_cfg_qty_max(risk_cfg_qty_max),
+        .risk_cfg_valid(risk_cfg_valid),
+        .risk_global_kill(risk_global_kill),
         .pcs_txdata(pcs_txdata),
         .pcs_txctl(pcs_txctl),
         .pcs_tx_valid(pcs_tx_valid),
@@ -161,9 +181,36 @@ module tb_hft_engine;
         pcs_rxctl      = 8'h0;
         pcs_rx_valid   = 1'b0;
         pcs_block_lock = 1'b0;
+        sym_cfg_symbol_idx = '0;
+        sym_cfg_instrument_tag = '0;
+        sym_cfg_entry_valid = 1'b0;
+        sym_cfg_valid = 1'b0;
+        risk_cfg_symbol_idx = '0;
+        risk_cfg_price_floor = '0;
+        risk_cfg_price_ceil = '0;
+        risk_cfg_qty_max = '0;
+        risk_cfg_valid = 1'b0;
+        risk_global_kill = 1'b0;
 
         repeat (3) @(posedge clk_pcs);
         rst_n = 1'b1;
+
+        @(negedge clk_pcs);
+        sym_cfg_symbol_idx     = 10'h155;
+        sym_cfg_instrument_tag = '0;
+        sym_cfg_entry_valid    = 1'b1;
+        sym_cfg_valid          = 1'b1;
+        risk_cfg_symbol_idx    = 10'h155;
+        risk_cfg_price_floor   = 64'd10;
+        risk_cfg_price_ceil    = 64'd1_000_000;
+        risk_cfg_qty_max       = 32'd1_000;
+        risk_cfg_valid         = 1'b1;
+
+        @(posedge clk_pcs);
+        #0.1;
+        @(negedge clk_pcs);
+        sym_cfg_valid = 1'b0;
+        risk_cfg_valid = 1'b0;
 
         @(negedge clk_pcs);
         pcs_block_lock = 1'b1;

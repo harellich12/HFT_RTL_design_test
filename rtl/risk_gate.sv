@@ -25,17 +25,27 @@ module risk_gate #(
     input  logic                       sym_miss,
     input  logic                       sym_err,
 
+    // Off-path limit load. Load entries while the datapath is quiescent.
+    input  logic [SYMBOL_ID_WIDTH-1:0] risk_cfg_symbol_idx,
+    input  logic [PRICE_WIDTH-1:0]     risk_cfg_price_floor,
+    input  logic [PRICE_WIDTH-1:0]     risk_cfg_price_ceil,
+    input  logic [QTY_WIDTH-1:0]       risk_cfg_qty_max,
+    input  logic                       risk_cfg_valid,
+    input  logic                       risk_global_kill,
+
     output logic        risk_pass,
     output logic        risk_kill,
     output logic [3:0]  kill_reason,
     output logic        risk_err
 );
 
-    localparam logic [PRICE_WIDTH-1:0] DEFAULT_PRICE_FLOOR = PRICE_WIDTH'(10);
-    localparam logic [PRICE_WIDTH-1:0] DEFAULT_PRICE_CEIL  = PRICE_WIDTH'(1_000_000);
-    localparam logic [QTY_WIDTH-1:0]   DEFAULT_QTY_MAX     = QTY_WIDTH'(1_000);
-    localparam logic                   DEFAULT_GLOBAL_KILL = 1'b0;
-
+    logic [PRICE_WIDTH-1:0] price_floor_table [SYMBOL_TABLE_DEPTH];
+    logic [PRICE_WIDTH-1:0] price_ceil_table [SYMBOL_TABLE_DEPTH];
+    logic [QTY_WIDTH-1:0]   qty_max_table [SYMBOL_TABLE_DEPTH];
+    logic                   global_kill_r;
+    logic [PRICE_WIDTH-1:0] price_floor_limit;
+    logic [PRICE_WIDTH-1:0] price_ceil_limit;
+    logic [QTY_WIDTH-1:0]   qty_max_limit;
     logic price_floor_violation;
     logic price_ceil_violation;
     logic quantity_violation;
@@ -52,7 +62,16 @@ module risk_gate #(
             risk_kill   <= 1'b0;
             kill_reason <= 4'h0;
             risk_err    <= 1'b0;
+            global_kill_r <= 1'b0;
         end else begin
+            global_kill_r <= risk_global_kill;
+
+            if (risk_cfg_valid) begin
+                price_floor_table[risk_cfg_symbol_idx] <= risk_cfg_price_floor;
+                price_ceil_table[risk_cfg_symbol_idx]  <= risk_cfg_price_ceil;
+                qty_max_table[risk_cfg_symbol_idx]     <= risk_cfg_qty_max;
+            end
+
             risk_pass   <= sym_valid && !risk_kill_next;
             risk_kill   <= risk_kill_next;
             kill_reason <= risk_kill_next ? kill_reason_next : 4'h0;
@@ -61,13 +80,17 @@ module risk_gate #(
     end
 
     always_comb begin
-        // SPEC_GAP: Risk tables and risk_global_kill are specified but absent from
-        // the frozen interface. These constants are reset-time stand-ins that keep
-        // the one-cycle datapath behavior testable until config ports are defined.
-        price_floor_violation = sym_valid && (price < DEFAULT_PRICE_FLOOR);
-        price_ceil_violation  = sym_valid && (price > DEFAULT_PRICE_CEIL);
-        quantity_violation    = sym_valid && (quantity > DEFAULT_QTY_MAX);
-        global_kill_violation = sym_valid && DEFAULT_GLOBAL_KILL;
+        price_floor_limit = price_floor_table[symbol_idx];
+        price_ceil_limit  = price_ceil_table[symbol_idx];
+        qty_max_limit     = qty_max_table[symbol_idx];
+
+        // SPEC_GAP: The spec requires reset-loaded risk tables, but does not
+        // define loader pins. These ports are off-path and expected to be used
+        // only during reset/quiescent configuration.
+        price_floor_violation = sym_valid && (price < price_floor_limit);
+        price_ceil_violation  = sym_valid && (price > price_ceil_limit);
+        quantity_violation    = sym_valid && (quantity > qty_max_limit);
+        global_kill_violation = sym_valid && global_kill_r;
         symbol_miss_violation = sym_valid && sym_miss;
         upstream_err_violation = sym_valid && sym_err;
 

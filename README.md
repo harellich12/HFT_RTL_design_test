@@ -31,8 +31,8 @@ PCS RX -> mac_shim -> hdr_stripper -> field_aligner -> sym_id_mapper -> risk_gat
 | `mac_shim` | Detects SOF/EOF, forwards preamble/SFD, computes RX FCS, and uses unrolled CRC logic. |
 | `hdr_stripper` | Strips fixed Ethernet/IPv4/UDP headers and aligns UDP payload words. |
 | `field_aligner` | Extracts typed fields from static payload offsets in the first 24 payload bytes. |
-| `sym_id_mapper` | Maps instrument IDs to symbol indexes using the current identity/tag placeholder. |
-| `risk_gate` | Applies parallel price, quantity, symbol miss, and upstream error checks. |
+| `sym_id_mapper` | Maps instrument IDs to symbol indexes through an off-path loaded direct-mapped tag table. |
+| `risk_gate` | Applies off-path loaded price/quantity limits, global kill, symbol miss, and upstream error checks in parallel. |
 | `pkt_formatter` | Emits a fixed Ethernet/IPv4/UDP outbound order frame with dynamic order fields and FCS. |
 | `hft_engine` | Integrates the full raw PCS RX/TX pipeline in spec order and exposes RX FCS status as telemetry. |
 
@@ -99,10 +99,12 @@ specification or frozen interfaces are incomplete or contradictory:
 - `hdr_stripper`: bad-length behavior is not numerically defined.
 - `hdr_stripper`: the written two-cycle `rx_sof` to `payload_valid` budget
   conflicts with stripping an in-stream preamble plus 42 header bytes.
-- `sym_id_mapper`: reset-time serial table load is required by spec, but no load
-  pins exist in the frozen interface.
-- `risk_gate`: risk tables and global kill input are required by spec, but no
-  config/input interface exists.
+- `sym_id_mapper`: the spec calls for reset-time serial table load; the current
+  branch uses direct off-path load pins while the exact serial protocol remains
+  undefined.
+- `risk_gate`: the spec calls for reset-loaded risk tables; the current branch
+  uses direct off-path limit load pins plus a synchronously captured global kill
+  input while the exact loader protocol remains undefined.
 - `risk_gate`: simultaneous violation priority is unspecified, so the current
   implementation reports multi-cause kills as reserved reason `4'hE`.
 - `pkt_formatter`: destination/source addressing and outbound order payload

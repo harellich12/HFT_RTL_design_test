@@ -12,11 +12,19 @@ module risk_gate_assertions #(
     input logic                         clk_pcs,
     input logic                         rst_n,
 
+    input logic [SYMBOL_ID_WIDTH-1:0]   symbol_idx,
     input logic [PRICE_WIDTH-1:0]       price,
     input logic [QTY_WIDTH-1:0]         quantity,
     input logic                         sym_valid,
     input logic                         sym_miss,
     input logic                         sym_err,
+
+    input logic [SYMBOL_ID_WIDTH-1:0]   risk_cfg_symbol_idx,
+    input logic [PRICE_WIDTH-1:0]       risk_cfg_price_floor,
+    input logic [PRICE_WIDTH-1:0]       risk_cfg_price_ceil,
+    input logic [QTY_WIDTH-1:0]         risk_cfg_qty_max,
+    input logic                         risk_cfg_valid,
+    input logic                         risk_global_kill,
 
     input logic                         risk_pass,
     input logic                         risk_kill,
@@ -24,33 +32,62 @@ module risk_gate_assertions #(
     input logic                         risk_err
 );
 
-    localparam logic [PRICE_WIDTH-1:0] ASSERT_PRICE_FLOOR = PRICE_WIDTH'(10);
-    localparam logic [PRICE_WIDTH-1:0] ASSERT_PRICE_CEIL  = PRICE_WIDTH'(1_000_000);
-    localparam logic [QTY_WIDTH-1:0]   ASSERT_QTY_MAX     = QTY_WIDTH'(1_000);
-
+    logic [PRICE_WIDTH-1:0] price_floor_table [SYMBOL_TABLE_DEPTH];
+    logic [PRICE_WIDTH-1:0] price_ceil_table [SYMBOL_TABLE_DEPTH];
+    logic [QTY_WIDTH-1:0]   qty_max_table [SYMBOL_TABLE_DEPTH];
+    logic                   global_kill_r;
+    logic [PRICE_WIDTH-1:0] price_floor_limit;
+    logic [PRICE_WIDTH-1:0] price_ceil_limit;
+    logic [QTY_WIDTH-1:0]   qty_max_limit;
     logic price_floor_violation;
     logic price_ceil_violation;
     logic quantity_violation;
+    logic global_kill_violation;
     logic multi_violation;
     logic in_range_condition;
     logic clean_pass_condition;
 
+    always_ff @(posedge clk_pcs) begin
+        if (!rst_n) begin
+            global_kill_r <= 1'b0;
+        end else begin
+            global_kill_r <= risk_global_kill;
+
+            if (risk_cfg_valid) begin
+                price_floor_table[risk_cfg_symbol_idx] <= risk_cfg_price_floor;
+                price_ceil_table[risk_cfg_symbol_idx]  <= risk_cfg_price_ceil;
+                qty_max_table[risk_cfg_symbol_idx]     <= risk_cfg_qty_max;
+            end
+        end
+    end
+
     always_comb begin
-        price_floor_violation = price < ASSERT_PRICE_FLOOR;
-        price_ceil_violation  = price > ASSERT_PRICE_CEIL;
-        quantity_violation    = quantity > ASSERT_QTY_MAX;
+        price_floor_limit = price_floor_table[symbol_idx];
+        price_ceil_limit  = price_ceil_table[symbol_idx];
+        qty_max_limit     = qty_max_table[symbol_idx];
+
+        price_floor_violation = price < price_floor_limit;
+        price_ceil_violation  = price > price_ceil_limit;
+        quantity_violation    = quantity > qty_max_limit;
+        global_kill_violation = global_kill_r;
         multi_violation       = (price_floor_violation && (price_ceil_violation
                                                         || quantity_violation
+                                                        || global_kill_violation
                                                         || sym_miss
                                                         || sym_err))
                              || (price_ceil_violation  && (quantity_violation
+                                                        || global_kill_violation
                                                         || sym_miss
                                                         || sym_err))
-                             || (quantity_violation    && (sym_miss || sym_err))
+                             || (quantity_violation    && (global_kill_violation
+                                                        || sym_miss
+                                                        || sym_err))
+                             || (global_kill_violation && (sym_miss || sym_err))
                              || (sym_miss              && sym_err);
         in_range_condition    = !price_floor_violation
                               && !price_ceil_violation
-                              && !quantity_violation;
+                              && !quantity_violation
+                              && !global_kill_violation;
         clean_pass_condition  = in_range_condition
                               && !sym_miss
                               && !sym_err;
@@ -75,16 +112,20 @@ module risk_gate_assertions #(
         (sym_valid && clean_pass_condition) |=> (risk_pass && !risk_kill && !risk_err && (kill_reason == 4'h0)));
 
     assert property (@(posedge clk_pcs) disable iff (!rst_n)
-        (sym_valid && price_floor_violation && !price_ceil_violation && !quantity_violation && !sym_miss && !sym_err)
+        (sym_valid && price_floor_violation && !price_ceil_violation && !quantity_violation && !global_kill_violation && !sym_miss && !sym_err)
         |=> (!risk_pass && risk_kill && !risk_err && (kill_reason == 4'h1)));
 
     assert property (@(posedge clk_pcs) disable iff (!rst_n)
-        (sym_valid && price_ceil_violation && !price_floor_violation && !quantity_violation && !sym_miss && !sym_err)
+        (sym_valid && price_ceil_violation && !price_floor_violation && !quantity_violation && !global_kill_violation && !sym_miss && !sym_err)
         |=> (!risk_pass && risk_kill && !risk_err && (kill_reason == 4'h2)));
 
     assert property (@(posedge clk_pcs) disable iff (!rst_n)
-        (sym_valid && quantity_violation && !price_floor_violation && !price_ceil_violation && !sym_miss && !sym_err)
+        (sym_valid && quantity_violation && !price_floor_violation && !price_ceil_violation && !global_kill_violation && !sym_miss && !sym_err)
         |=> (!risk_pass && risk_kill && !risk_err && (kill_reason == 4'h3)));
+
+    assert property (@(posedge clk_pcs) disable iff (!rst_n)
+        (sym_valid && global_kill_violation && !price_floor_violation && !price_ceil_violation && !quantity_violation && !sym_miss && !sym_err)
+        |=> (!risk_pass && risk_kill && !risk_err && (kill_reason == 4'h4)));
 
     assert property (@(posedge clk_pcs) disable iff (!rst_n)
         (sym_valid && sym_miss && in_range_condition && !sym_err)
@@ -108,11 +149,18 @@ bind risk_gate risk_gate_assertions #(
 ) u_risk_gate_assertions (
     .clk_pcs(clk_pcs),
     .rst_n(rst_n),
+    .symbol_idx(symbol_idx),
     .price(price),
     .quantity(quantity),
     .sym_valid(sym_valid),
     .sym_miss(sym_miss),
     .sym_err(sym_err),
+    .risk_cfg_symbol_idx(risk_cfg_symbol_idx),
+    .risk_cfg_price_floor(risk_cfg_price_floor),
+    .risk_cfg_price_ceil(risk_cfg_price_ceil),
+    .risk_cfg_qty_max(risk_cfg_qty_max),
+    .risk_cfg_valid(risk_cfg_valid),
+    .risk_global_kill(risk_global_kill),
     .risk_pass(risk_pass),
     .risk_kill(risk_kill),
     .kill_reason(kill_reason),

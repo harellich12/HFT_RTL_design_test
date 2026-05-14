@@ -26,6 +26,18 @@ module hft_engine #(
     // RX telemetry
     output logic        rx_mac_fcs_valid,
 
+    // Off-path configuration
+    input  logic [SYMBOL_ID_WIDTH-1:0]    sym_cfg_symbol_idx,
+    input  logic [64-SYMBOL_ID_WIDTH-1:0] sym_cfg_instrument_tag,
+    input  logic                          sym_cfg_entry_valid,
+    input  logic                          sym_cfg_valid,
+    input  logic [SYMBOL_ID_WIDTH-1:0]    risk_cfg_symbol_idx,
+    input  logic [PRICE_WIDTH-1:0]        risk_cfg_price_floor,
+    input  logic [PRICE_WIDTH-1:0]        risk_cfg_price_ceil,
+    input  logic [QTY_WIDTH-1:0]          risk_cfg_qty_max,
+    input  logic                          risk_cfg_valid,
+    input  logic                          risk_global_kill,
+
     // Raw PCS TX
     output logic [63:0] pcs_txdata,
     output logic [7:0]  pcs_txctl,
@@ -155,6 +167,10 @@ module hft_engine #(
         .instrument_id(instrument_id),
         .field_valid(field_valid),
         .field_err(field_err),
+        .sym_cfg_symbol_idx(sym_cfg_symbol_idx),
+        .sym_cfg_instrument_tag(sym_cfg_instrument_tag),
+        .sym_cfg_entry_valid(sym_cfg_entry_valid),
+        .sym_cfg_valid(sym_cfg_valid),
         .symbol_idx(symbol_idx),
         .sym_valid(sym_valid),
         .sym_miss(sym_miss),
@@ -176,6 +192,12 @@ module hft_engine #(
         .sym_valid(sym_valid),
         .sym_miss(sym_miss),
         .sym_err(sym_err),
+        .risk_cfg_symbol_idx(risk_cfg_symbol_idx),
+        .risk_cfg_price_floor(risk_cfg_price_floor),
+        .risk_cfg_price_ceil(risk_cfg_price_ceil),
+        .risk_cfg_qty_max(risk_cfg_qty_max),
+        .risk_cfg_valid(risk_cfg_valid),
+        .risk_global_kill(risk_global_kill),
         .risk_pass(risk_pass),
         .risk_kill(risk_kill),
         .kill_reason(),
