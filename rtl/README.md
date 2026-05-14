@@ -181,13 +181,20 @@ From the repository root:
 
 ```bash
 make lint
+make test
 ```
 
 Or directly:
 
 ```bash
 scripts/run_verilator_flow.sh lint
+scripts/run_verilator_flow.sh test
 ```
+
+Executable smoke builds default to `JOBS=1` because Verilator 5.048 was observed
+to abort internally during a `-j 12` `tb_pkt_formatter` build. Use
+`JOBS=N make test` only when the local toolchain is known to tolerate parallel
+binary builds.
 
 To lint a single block with assertions:
 

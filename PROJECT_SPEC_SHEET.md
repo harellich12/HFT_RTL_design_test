@@ -217,6 +217,7 @@ Interpretation: the downstream decision path from `field_valid` to `tx_sof` is 3
 | Smoke tests for implemented high-risk/current blocks. | Engineering verification need. | Fast regression catches obvious behavioral breaks. | Existing tests cover `mac_shim`, `hdr_stripper`, `field_aligner`, `sym_id_mapper`, `risk_gate`, `pkt_formatter`, and top-level `hft_engine`. |
 | WSL/Linux repeatable flow. | User request and toolchain constraints. | Avoids manual command drift and Windows Make path issues. | `Makefile` and `scripts/run_verilator_flow.sh` exist. |
 | Build outside paths with spaces. | GNU Make/Verilator behavior observed during run. | Verilator generated Makefiles fail under repo path containing spaces. | Flow builds under `/tmp/hft_verilator_flow_$USER`. |
+| Serialized smoke builds by default. | Verilator 5.048 behavior observed during `tb_pkt_formatter` build. | High `-j` values can trip an internal Verilator thread-pool shutdown failure unrelated to RTL behavior. | `scripts/run_verilator_flow.sh` defaults `JOBS=1`; users can override with `JOBS=N`. |
 
 ## WSL Commands
 
@@ -255,7 +256,7 @@ gtkwave tb/hft_engine_smoke.vcd
 | Top-level integration | Complete structurally and lint-clean. |
 | Assertion binds | Complete for existing RTL modules. |
 | Smoke tests | Present for `mac_shim`, `hdr_stripper`, `field_aligner`, `sym_id_mapper`, `risk_gate`, `pkt_formatter`, and top-level `hft_engine`. |
-| WSL flow | Present and used successfully. |
+| WSL/Linux flow | Present; `make test` uses serialized Verilator builds by default. |
 | Spec gaps | Tracked and preserved. |
 | Strict no-loop compliance | `mac_shim` CRC helper is unrolled; no loops are present in synthesizable RTL. |
 | Quant/strategy layer | Not part of current source spec; proposed separately in `STRATEGY_CORE_PROPOSAL.md`. |

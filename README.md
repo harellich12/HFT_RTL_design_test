@@ -70,8 +70,10 @@ Current verified state:
 - RTL lint-only passes for all seven RTL modules, including `hft_engine`.
 - Testbench lint-only passes for all smoke testbenches.
 - Assertion bind lint-only passes with `--assert`.
-- Executable smoke simulation is blocked in the current Windows/MSYS setup until
-  `make` and compiler tooling are installed or visible on `PATH`.
+- Executable smoke simulation is supported through `make test`. Smoke builds
+  default to `JOBS=1` to avoid a Verilator 5.048 thread-pool shutdown failure
+  observed with high parallelism; override with `JOBS=N make test` only on a
+  stable local toolchain.
 
 ## Current Timing Snapshot
 
