@@ -9,11 +9,11 @@
 // - Owns all fixed byte offsets and endian conversion before risk/order logic.
 // - Propagates upstream framing errors as field_err.
 module field_aligner #(
-    parameter int MSG_TYPE_OFFSET      = 0,   // Legal range: 0; fixed byte offset, no hardware cost when unchanged.
-    parameter int INSTRUMENT_ID_OFFSET = 2,   // Legal range: 2; fixed byte offset, changes static slice selection.
-    parameter int PRICE_OFFSET         = 10,  // Legal range: 10; fixed byte offset, changes static slice selection.
-    parameter int QUANTITY_OFFSET      = 18,  // Legal range: 18; fixed byte offset, changes static slice selection.
-    parameter int SIDE_OFFSET          = 22   // Legal range: 22; fixed byte offset, changes static slice selection.
+    parameter int MSG_TYPE_OFFSET      = 0,   // Legal range: 0..22 with field end <= byte 23; changes static slice selection.
+    parameter int INSTRUMENT_ID_OFFSET = 2,   // Legal range: 0..16 with field end <= byte 23; changes static slice selection.
+    parameter int PRICE_OFFSET         = 10,  // Legal range: 0..16 with field end <= byte 23; changes static slice selection.
+    parameter int QUANTITY_OFFSET      = 18,  // Legal range: 0..20 with field end <= byte 23; changes static slice selection.
+    parameter int SIDE_OFFSET          = 22   // Legal range: 0..23 with field end <= byte 23; changes static slice selection.
 ) (
     input  logic        clk_pcs,
     input  logic        rst_n,
@@ -35,15 +35,45 @@ module field_aligner #(
 );
 
     localparam int WORD_CNT_WIDTH = 2;
+    localparam int WINDOW_BYTES   = 24;
+
+    localparam int MSG_TYPE_BYTES      = 2;
+    localparam int INSTRUMENT_ID_BYTES = 8;
+    localparam int PRICE_BYTES         = 8;
+    localparam int QUANTITY_BYTES      = 4;
+    localparam int SIDE_BYTES          = 1;
+
+    localparam int MSG_TYPE_END_BYTES      = MSG_TYPE_OFFSET + MSG_TYPE_BYTES;
+    localparam int INSTRUMENT_ID_END_BYTES = INSTRUMENT_ID_OFFSET + INSTRUMENT_ID_BYTES;
+    localparam int PRICE_END_BYTES         = PRICE_OFFSET + PRICE_BYTES;
+    localparam int QUANTITY_END_BYTES      = QUANTITY_OFFSET + QUANTITY_BYTES;
+    localparam int SIDE_END_BYTES          = SIDE_OFFSET + SIDE_BYTES;
+
+    localparam int MAX_MSG_INSTR_BYTES = (MSG_TYPE_END_BYTES > INSTRUMENT_ID_END_BYTES)
+                                       ? MSG_TYPE_END_BYTES : INSTRUMENT_ID_END_BYTES;
+    localparam int MAX_PRICE_QTY_BYTES = (PRICE_END_BYTES > QUANTITY_END_BYTES)
+                                       ? PRICE_END_BYTES : QUANTITY_END_BYTES;
+    localparam int MAX_DATA_BYTES      = (MAX_MSG_INSTR_BYTES > MAX_PRICE_QTY_BYTES)
+                                       ? MAX_MSG_INSTR_BYTES : MAX_PRICE_QTY_BYTES;
+    localparam int MAX_FIELD_BYTES     = (MAX_DATA_BYTES > SIDE_END_BYTES)
+                                       ? MAX_DATA_BYTES : SIDE_END_BYTES;
+
+    localparam int MSG_TYPE_BIT      = MSG_TYPE_OFFSET * 8;
+    localparam int INSTRUMENT_ID_BIT = INSTRUMENT_ID_OFFSET * 8;
+    localparam int PRICE_BIT         = PRICE_OFFSET * 8;
+    localparam int QUANTITY_BIT      = QUANTITY_OFFSET * 8;
+    localparam int SIDE_BIT          = SIDE_OFFSET * 8;
 
     logic [WORD_CNT_WIDTH-1:0] payload_word_cnt_r;
-    logic [47:0] instrument_id_hi_r;
-    logic [15:0] instrument_id_lo_r;
-    logic [47:0] price_hi_r;
+    logic [63:0] payload_word0_r;
+    logic [63:0] payload_word1_r;
     logic        frame_err_r;
     logic        fields_captured_r;
     logic        align_err_now;
     logic        field_err_next;
+    logic [WORD_CNT_WIDTH-1:0] current_word_idx;
+    logic [5:0]  payload_bytes_available;
+    logic [WINDOW_BYTES*8-1:0] payload_window;
 
     logic [15:0] msg_type_next;
     logic [63:0] instrument_id_next;
@@ -55,9 +85,8 @@ module field_aligner #(
     always_ff @(posedge clk_pcs) begin
         if (!rst_n) begin
             payload_word_cnt_r <= '0;
-            instrument_id_hi_r <= 48'h0;
-            instrument_id_lo_r <= 16'h0;
-            price_hi_r         <= 48'h0;
+            payload_word0_r    <= 64'h0;
+            payload_word1_r    <= 64'h0;
             frame_err_r        <= 1'b0;
             fields_captured_r  <= 1'b0;
             msg_type           <= 16'h0;
@@ -81,20 +110,17 @@ module field_aligner #(
 
             if (payload_valid && payload_sof) begin
                 payload_word_cnt_r <= {{(WORD_CNT_WIDTH-1){1'b0}}, 1'b1};
+                payload_word0_r    <= payload_data;
+                payload_word1_r    <= 64'h0;
                 frame_err_r        <= frame_err;
                 fields_captured_r  <= 1'b0;
-                // First payload word contains msg_type and the upper 6 bytes of instrument_id.
-                msg_type           <= {payload_data[7:0], payload_data[15:8]};
-                instrument_id_hi_r <= payload_data[63:16];
             end else if (payload_valid) begin
                 if (!payload_eof) begin
                     payload_word_cnt_r <= payload_word_cnt_r + {{(WORD_CNT_WIDTH-1){1'b0}}, 1'b1};
                 end
 
                 if (payload_word_cnt_r == 2'd1) begin
-                    // Second payload word finishes instrument_id and starts price.
-                    instrument_id_lo_r <= payload_data[15:0];
-                    price_hi_r         <= payload_data[63:16];
+                    payload_word1_r <= payload_data;
                 end
 
                 if (frame_err) begin
@@ -115,41 +141,52 @@ module field_aligner #(
     end
 
     always_comb begin
-        align_err_now = payload_valid && payload_eof && (payload_word_cnt_r < 2'd2);
+        current_word_idx = payload_sof ? '0 : payload_word_cnt_r;
+        payload_bytes_available = ({4'h0, current_word_idx} + 6'd1) << 3;
+
+        unique case (current_word_idx)
+            2'd0: payload_window = {128'h0, payload_data};
+            2'd1: payload_window = {64'h0, payload_data, payload_word0_r};
+            default: payload_window = {payload_data, payload_word1_r, payload_word0_r};
+        endcase
+
+        align_err_now = payload_valid
+                     && payload_eof
+                     && (payload_bytes_available < MAX_FIELD_BYTES[5:0]);
         field_err_next = frame_err_r || frame_err || align_err_now;
 
-        // SPEC_GAP: The spec asks for static offset parameters but gives no parameterized
-        // interface; these defaults preserve the documented fixed feed layout.
         field_valid_next = payload_valid
-                         && (payload_word_cnt_r == 2'd2)
+                         && (payload_bytes_available >= MAX_FIELD_BYTES[5:0])
                          && !fields_captured_r
                          && !field_err_next;
 
-        msg_type_next = msg_type;
+        msg_type_next = {payload_window[MSG_TYPE_BIT +: 8],
+                         payload_window[MSG_TYPE_BIT + 8 +: 8]};
 
-        instrument_id_next = {instrument_id_hi_r[7:0],  instrument_id_hi_r[15:8],
-                              instrument_id_hi_r[23:16], instrument_id_hi_r[31:24],
-                              instrument_id_hi_r[39:32], instrument_id_hi_r[47:40],
-                              instrument_id_lo_r[7:0],  instrument_id_lo_r[15:8]};
+        instrument_id_next = {payload_window[INSTRUMENT_ID_BIT +: 8],
+                              payload_window[INSTRUMENT_ID_BIT + 8 +: 8],
+                              payload_window[INSTRUMENT_ID_BIT + 16 +: 8],
+                              payload_window[INSTRUMENT_ID_BIT + 24 +: 8],
+                              payload_window[INSTRUMENT_ID_BIT + 32 +: 8],
+                              payload_window[INSTRUMENT_ID_BIT + 40 +: 8],
+                              payload_window[INSTRUMENT_ID_BIT + 48 +: 8],
+                              payload_window[INSTRUMENT_ID_BIT + 56 +: 8]};
 
-        price_next = {price_hi_r[7:0],  price_hi_r[15:8],
-                      price_hi_r[23:16], price_hi_r[31:24],
-                      price_hi_r[39:32], price_hi_r[47:40],
-                      payload_data[7:0], payload_data[15:8]};
+        price_next = {payload_window[PRICE_BIT +: 8],
+                      payload_window[PRICE_BIT + 8 +: 8],
+                      payload_window[PRICE_BIT + 16 +: 8],
+                      payload_window[PRICE_BIT + 24 +: 8],
+                      payload_window[PRICE_BIT + 32 +: 8],
+                      payload_window[PRICE_BIT + 40 +: 8],
+                      payload_window[PRICE_BIT + 48 +: 8],
+                      payload_window[PRICE_BIT + 56 +: 8]};
 
-        quantity_next = {payload_data[23:16], payload_data[31:24],
-                         payload_data[39:32], payload_data[47:40]};
+        quantity_next = {payload_window[QUANTITY_BIT +: 8],
+                         payload_window[QUANTITY_BIT + 8 +: 8],
+                         payload_window[QUANTITY_BIT + 16 +: 8],
+                         payload_window[QUANTITY_BIT + 24 +: 8]};
 
-        side_next = payload_data[55:48];
-
-        if ((MSG_TYPE_OFFSET != 0)
-         || (INSTRUMENT_ID_OFFSET != 2)
-         || (PRICE_OFFSET != 10)
-         || (QUANTITY_OFFSET != 18)
-         || (SIDE_OFFSET != 22)) begin
-            field_valid_next = 1'b0;
-            field_err_next   = payload_valid;
-        end
+        side_next = payload_window[SIDE_BIT +: 8];
     end
 
 endmodule

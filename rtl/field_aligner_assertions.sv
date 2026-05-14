@@ -4,11 +4,11 @@
 // Clock      : clk_pcs @ 156.25 MHz
 // Reset      : rst_n, active-low synchronous
 module field_aligner_assertions #(
-    parameter int MSG_TYPE_OFFSET      = 0,   // Legal range: 0; matches bound field_aligner message type offset.
-    parameter int INSTRUMENT_ID_OFFSET = 2,   // Legal range: 2; matches bound field_aligner instrument offset.
-    parameter int PRICE_OFFSET         = 10,  // Legal range: 10; matches bound field_aligner price offset.
-    parameter int QUANTITY_OFFSET      = 18,  // Legal range: 18; matches bound field_aligner quantity offset.
-    parameter int SIDE_OFFSET          = 22   // Legal range: 22; matches bound field_aligner side offset.
+    parameter int MSG_TYPE_OFFSET      = 0,   // Legal range: 0..22 with field end <= byte 23; matches bound offset.
+    parameter int INSTRUMENT_ID_OFFSET = 2,   // Legal range: 0..16 with field end <= byte 23; matches bound offset.
+    parameter int PRICE_OFFSET         = 10,  // Legal range: 0..16 with field end <= byte 23; matches bound offset.
+    parameter int QUANTITY_OFFSET      = 18,  // Legal range: 0..20 with field end <= byte 23; matches bound offset.
+    parameter int SIDE_OFFSET          = 22   // Legal range: 0..23 with field end <= byte 23; matches bound offset.
 ) (
     input logic        clk_pcs,
     input logic        rst_n,

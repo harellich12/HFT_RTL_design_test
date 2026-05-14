@@ -16,6 +16,13 @@ module tb_field_aligner;
     logic [7:0]  side;
     logic        field_valid;
     logic        field_err;
+    logic [15:0] alt_msg_type;
+    logic [63:0] alt_instrument_id;
+    logic [63:0] alt_price;
+    logic [31:0] alt_quantity;
+    logic [7:0]  alt_side;
+    logic        alt_field_valid;
+    logic        alt_field_err;
 
     field_aligner dut (
         .clk_pcs(clk_pcs),
@@ -32,6 +39,29 @@ module tb_field_aligner;
         .side(side),
         .field_valid(field_valid),
         .field_err(field_err)
+    );
+
+    field_aligner #(
+        .MSG_TYPE_OFFSET(1),
+        .INSTRUMENT_ID_OFFSET(3),
+        .PRICE_OFFSET(11),
+        .QUANTITY_OFFSET(19),
+        .SIDE_OFFSET(23)
+    ) alt_dut (
+        .clk_pcs(clk_pcs),
+        .rst_n(rst_n),
+        .payload_data(payload_data),
+        .payload_valid(payload_valid),
+        .payload_sof(payload_sof),
+        .payload_eof(payload_eof),
+        .frame_err(frame_err),
+        .msg_type(alt_msg_type),
+        .instrument_id(alt_instrument_id),
+        .price(alt_price),
+        .quantity(alt_quantity),
+        .side(alt_side),
+        .field_valid(alt_field_valid),
+        .field_err(alt_field_err)
     );
 
     function automatic logic [63:0] pack8 (
@@ -147,6 +177,22 @@ module tb_field_aligner;
         expect_equal64(price,         64'h1020304050607080, "price");
         expect_equal32(quantity,      32'h000003E8, "quantity");
         expect_equal8(side,           8'h42, "side");
+
+        if (!alt_field_valid) begin
+            $error("alt_field_valid did not assert on third payload word");
+            $fatal;
+        end
+
+        if (alt_field_err) begin
+            $error("alt_field_err asserted during alternate-offset smoke frame");
+            $fatal;
+        end
+
+        expect_equal16(alt_msg_type,      16'h3401, "alt_msg_type");
+        expect_equal64(alt_instrument_id, 64'h0203040506070810, "alt_instrument_id");
+        expect_equal64(alt_price,         64'h2030405060708000, "alt_price");
+        expect_equal32(alt_quantity,      32'h0003E842, "alt_quantity");
+        expect_equal8(alt_side,           8'h00, "alt_side");
 
         @(negedge clk_pcs);
         payload_valid = 1'b0;

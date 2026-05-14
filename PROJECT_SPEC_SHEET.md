@@ -102,19 +102,13 @@ spec is, where it came from, why it matters, and how the current project address
 
 | Spec | Source | Why It Matters | Current Status |
 | --- | --- | --- | --- |
-| Extract `msg_type`, `instrument_id`, `price`, `quantity`, and `side`. | Original `field_aligner` interface. | Converts untyped payload bytes into trading fields. | Implemented for fixed default layout. |
+| Extract `msg_type`, `instrument_id`, `price`, `quantity`, and `side`. | Original `field_aligner` interface. | Converts untyped payload bytes into trading fields. | Implemented for static offsets within the first 24 payload bytes. |
 | Own all endian conversion. | Original `field_aligner` constraints. | Prevents repeated byte-swap logic downstream. | Implemented with static byte reversal. |
-| Support static offset parameters. | Original constraints. | Allows compile-time layout changes without runtime parsing. | Parameters exist, but non-default values assert `field_err` because no broader parameterized implementation is defined. |
-| Cross-word fields cost at most one extra cycle. | Original constraints. | Keeps field extraction bounded. | Implemented by capturing partial fields and completing on third payload word. |
+| Support static offset parameters. | Original constraints. | Allows compile-time layout changes without runtime parsing. | Implemented as compile-time part-selects over a three-word payload window. |
+| Cross-word fields cost at most one extra cycle. | Original constraints. | Keeps field extraction bounded. | Implemented by capturing the first two payload words and completing when the last required static byte arrives. |
 | Propagate upstream framing errors as `field_err`. | Original interface. | Bad frames must be killed downstream. | Implemented. |
 | Assertion bind coverage. | Original assertion requirement. | Checks extraction correctness and error suppression. | `field_aligner_assertions.sv` exists and lints. |
-| Smoke test coverage. | Current verification. | Confirms nominal byte extraction. | `tb/tb_field_aligner.sv` passes. |
-
-### `field_aligner` Spec Gap
-
-| Gap | Source | Why It Matters | Current Interpretation |
-| --- | --- | --- | --- |
-| Spec asks for static offset parameters but does not define a fully parameterized extraction interface or legal non-default layouts. | Original constraints and RTL marker. | Arbitrary static offsets would require generated slice logic not described by the frozen module. | Defaults implement the documented feed layout; non-default parameters produce an error. |
+| Smoke test coverage. | Current verification. | Confirms nominal and alternate-offset byte extraction. | `tb/tb_field_aligner.sv` lints with default and non-default parameter instances. |
 
 ## Module Spec: `sym_id_mapper`
 
