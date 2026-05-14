@@ -120,7 +120,7 @@ module hdr_stripper (
                       && ({rx_data[39:32], rx_data[47:40]} != 16'h0800);
         ihl_err       = rx_valid
                       && (current_word_cnt == 16'd2)
-                      && (rx_data[51:48] != 4'h5);
+                      && (rx_data[55:52] != 4'h5);
         protocol_err  = rx_valid
                       && (current_word_cnt == 16'd3)
                       && (rx_data[63:56] != 8'h11);
