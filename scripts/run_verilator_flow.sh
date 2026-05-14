@@ -5,7 +5,10 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
 verilator_bin="${VERILATOR:-verilator}"
-jobs="${JOBS:-$(nproc 2>/dev/null || echo 1)}"
+# Verilator 5.048 can hit an internal thread-pool shutdown failure during
+# --binary builds at high -j values. Keep smoke builds deterministic by default;
+# override with JOBS=N when the local toolchain is known to be stable.
+jobs="${JOBS:-1}"
 build_root="${BUILD_ROOT:-/tmp/hft_verilator_flow_${USER:-user}}"
 
 usage() {
@@ -20,7 +23,7 @@ Targets:
 
 Environment:
   VERILATOR=/path/to/verilator   Override Verilator executable.
-  JOBS=N                         Parallel make jobs used by Verilator builds.
+  JOBS=N                         Parallel make jobs used by Verilator builds; defaults to 1.
   BUILD_ROOT=/tmp/path            Verilator build dir; must not contain spaces.
 USAGE
 }
