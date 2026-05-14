@@ -31,6 +31,7 @@ module risk_gate_assertions #(
     logic price_floor_violation;
     logic price_ceil_violation;
     logic quantity_violation;
+    logic multi_violation;
     logic in_range_condition;
     logic clean_pass_condition;
 
@@ -38,6 +39,15 @@ module risk_gate_assertions #(
         price_floor_violation = price < ASSERT_PRICE_FLOOR;
         price_ceil_violation  = price > ASSERT_PRICE_CEIL;
         quantity_violation    = quantity > ASSERT_QTY_MAX;
+        multi_violation       = (price_floor_violation && (price_ceil_violation
+                                                        || quantity_violation
+                                                        || sym_miss
+                                                        || sym_err))
+                             || (price_ceil_violation  && (quantity_violation
+                                                        || sym_miss
+                                                        || sym_err))
+                             || (quantity_violation    && (sym_miss || sym_err))
+                             || (sym_miss              && sym_err);
         in_range_condition    = !price_floor_violation
                               && !price_ceil_violation
                               && !quantity_violation;
@@ -65,11 +75,11 @@ module risk_gate_assertions #(
         (sym_valid && clean_pass_condition) |=> (risk_pass && !risk_kill && !risk_err && (kill_reason == 4'h0)));
 
     assert property (@(posedge clk_pcs) disable iff (!rst_n)
-        (sym_valid && price_floor_violation && !quantity_violation && !sym_miss && !sym_err)
+        (sym_valid && price_floor_violation && !price_ceil_violation && !quantity_violation && !sym_miss && !sym_err)
         |=> (!risk_pass && risk_kill && !risk_err && (kill_reason == 4'h1)));
 
     assert property (@(posedge clk_pcs) disable iff (!rst_n)
-        (sym_valid && price_ceil_violation && !quantity_violation && !sym_miss && !sym_err)
+        (sym_valid && price_ceil_violation && !price_floor_violation && !quantity_violation && !sym_miss && !sym_err)
         |=> (!risk_pass && risk_kill && !risk_err && (kill_reason == 4'h2)));
 
     assert property (@(posedge clk_pcs) disable iff (!rst_n)
@@ -83,6 +93,10 @@ module risk_gate_assertions #(
     assert property (@(posedge clk_pcs) disable iff (!rst_n)
         (sym_valid && sym_err && in_range_condition && !sym_miss)
         |=> (!risk_pass && risk_kill && risk_err && (kill_reason == 4'hF)));
+
+    assert property (@(posedge clk_pcs) disable iff (!rst_n)
+        (sym_valid && multi_violation)
+        |=> (!risk_pass && risk_kill && (risk_err == $past(sym_err)) && (kill_reason == 4'hE)));
 
 endmodule
 

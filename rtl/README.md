@@ -139,6 +139,7 @@ decision one cycle after `sym_valid`.
 | Global kill | constant `0` placeholder | `4'h4` |
 | Symbol miss | `sym_miss` | `4'h5` |
 | Upstream error | `sym_err` | `4'hF` |
+| Multiple simultaneous causes | any two or more causes | `4'hE` |
 
 The table values and global kill switch are placeholders because the frozen
 `risk_gate` interface has no configuration inputs.
@@ -162,7 +163,7 @@ The table values and global kill switch are placeholders because the frozen
 | `hdr_stripper` | Two-cycle SOF-to-payload budget conflicts with in-stream preamble/header stripping. |
 | `sym_id_mapper` | Reset-time serial table load is required by spec, but no load pins exist. |
 | `risk_gate` | Risk tables and global kill config are required by spec, but no inputs exist. |
-| `risk_gate` | Simultaneous violation priority is unspecified; implementation OR-masks reasons. |
+| `risk_gate` | Simultaneous violation priority is unspecified; implementation reports multi-cause kills as `4'hE`. |
 | `pkt_formatter` | Production addressing and order payload schema are unspecified. |
 | `hft_engine` | Top-level raw PCS boundary conflicts with spec text listing derived MAC top-level signals. |
 
@@ -186,4 +187,3 @@ To lint a single block with assertions:
 verilator --lint-only --timing --assert --top-module risk_gate \
     rtl/risk_gate.sv rtl/risk_gate_assertions.sv
 ```
-

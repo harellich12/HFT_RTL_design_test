@@ -118,6 +118,15 @@ module tb_risk_gate;
         drive_case(64'd100, 32'd100, 1'b0, 1'b1);
         expect_risk(1'b0, 1'b1, 4'hF, 1'b1, "upstream error");
 
+        drive_case(64'd1_000_001, 32'd1_001, 1'b0, 1'b0);
+        expect_risk(1'b0, 1'b1, 4'hE, 1'b0, "multi ceiling quantity");
+
+        drive_case(64'd100, 32'd1_001, 1'b1, 1'b0);
+        expect_risk(1'b0, 1'b1, 4'hE, 1'b0, "multi quantity miss");
+
+        drive_case(64'd100, 32'd1_001, 1'b0, 1'b1);
+        expect_risk(1'b0, 1'b1, 4'hE, 1'b1, "multi quantity upstream error");
+
         @(negedge clk_pcs);
         sym_valid = 1'b0;
         sym_miss  = 1'b0;

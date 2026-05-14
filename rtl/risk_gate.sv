@@ -42,6 +42,7 @@ module risk_gate #(
     logic global_kill_violation;
     logic symbol_miss_violation;
     logic upstream_err_violation;
+    logic multi_violation;
     logic risk_kill_next;
     logic [3:0] kill_reason_next;
 
@@ -77,14 +78,31 @@ module risk_gate #(
                       || symbol_miss_violation
                       || upstream_err_violation;
 
-        // SPEC_GAP: Simultaneous violation priority is not defined. OR-masked
-        // reason generation keeps all checks parallel and avoids a priority chain.
-        kill_reason_next = ({4{price_floor_violation}}  & 4'h1)
-                         | ({4{price_ceil_violation}}   & 4'h2)
-                         | ({4{quantity_violation}}     & 4'h3)
-                         | ({4{global_kill_violation}}  & 4'h4)
-                         | ({4{symbol_miss_violation}}  & 4'h5)
-                         | ({4{upstream_err_violation}} & 4'hF);
+        multi_violation = (price_floor_violation  && (price_ceil_violation
+                                                    || quantity_violation
+                                                    || global_kill_violation
+                                                    || symbol_miss_violation
+                                                    || upstream_err_violation))
+                       || (price_ceil_violation   && (quantity_violation
+                                                    || global_kill_violation
+                                                    || symbol_miss_violation
+                                                    || upstream_err_violation))
+                       || (quantity_violation     && (global_kill_violation
+                                                    || symbol_miss_violation
+                                                    || upstream_err_violation))
+                       || (global_kill_violation  && (symbol_miss_violation
+                                                    || upstream_err_violation))
+                       || (symbol_miss_violation  && upstream_err_violation);
+
+        // SPEC_GAP: Simultaneous violation priority is not defined. Encode any
+        // multi-cause kill as 4'hE so parallel checks cannot alias a single cause.
+        kill_reason_next = multi_violation ? 4'hE :
+                           (({4{price_floor_violation}}  & 4'h1)
+                          | ({4{price_ceil_violation}}   & 4'h2)
+                          | ({4{quantity_violation}}     & 4'h3)
+                          | ({4{global_kill_violation}}  & 4'h4)
+                          | ({4{symbol_miss_violation}}  & 4'h5)
+                          | ({4{upstream_err_violation}} & 4'hF));
     end
 
 endmodule

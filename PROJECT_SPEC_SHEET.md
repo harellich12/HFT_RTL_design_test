@@ -133,19 +133,19 @@ spec is, where it came from, why it matters, and how the current project address
 | Spec | Source | Why It Matters | Current Status |
 | --- | --- | --- | --- |
 | Evaluate price floor, price ceiling, quantity limit, kill switch, symbol miss, and upstream error. | Original `risk_gate` table. | Risk gate is the safety-critical block preventing bad orders. | Implemented with current constant stand-in limits and upstream flags. |
-| Complete checks in parallel combinational logic and register outputs. | Original constraints. | Avoids priority-chain or iterative latency. | Implemented as parallel violation signals plus OR-masked reason. |
+| Complete checks in parallel combinational logic and register outputs. | Original constraints. | Avoids priority-chain or iterative latency. | Implemented as parallel violation signals with reserved multi-cause encoding. |
 | `risk_kill` valid one cycle after `sym_valid`. | Original timing table. | Kill latency must be bounded. | Implemented and asserted. |
 | `risk_pass` and `risk_kill` mutually exclusive. | Derived from risk gate interface and safety behavior. | Formatter must never see pass and kill together. | Asserted in `risk_gate_assertions.sv`. |
-| Kill reason encoding follows original table. | Original risk check table. | Debug and downstream action depend on cause. | Implemented for single and OR-combined reasons; single-cause cases asserted. |
+| Kill reason encoding follows original table for single-cause violations. | Original risk check table. | Debug and downstream action depend on cause. | Single-cause cases use spec codes; simultaneous violations report reserved code `4'hE`. |
 | Assertion bind coverage. | Original assertion requirement and safety priority. | Kill path needs stronger coverage than pass path. | `risk_gate_assertions.sv` exists and lints. |
-| Smoke test coverage. | Current verification. | Confirms pass, floor, ceiling, quantity, miss, and upstream error. | `tb/tb_risk_gate.sv` passes. |
+| Smoke test coverage. | Current verification. | Confirms pass, single-cause kills, and multi-cause kill encoding. | `tb/tb_risk_gate.sv` passes. |
 
 ### `risk_gate` Spec Gaps
 
 | Gap | Source | Why It Matters | Current Interpretation |
 | --- | --- | --- | --- |
 | Risk tables and global kill are required but absent from interface. | Original constraints and RTL marker. | Production risk limits must be configurable. | Current RTL uses constants: floor 10, ceiling 1,000,000, quantity max 1,000, global kill 0. |
-| Simultaneous violation priority is unspecified. | Original risk table does not define priority. | Multiple violations can happen in one cycle. | Current RTL OR-masks reasons to avoid a priority chain. |
+| Simultaneous violation priority is unspecified. | Original risk table does not define priority. | Multiple violations can happen in one cycle. | Current RTL reports any multi-cause kill as reserved `4'hE` to avoid aliasing a legal single-cause code. |
 
 ## Module Spec: `pkt_formatter`
 

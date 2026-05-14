@@ -104,7 +104,7 @@ specification or frozen interfaces are incomplete or contradictory:
 - `risk_gate`: risk tables and global kill input are required by spec, but no
   config/input interface exists.
 - `risk_gate`: simultaneous violation priority is unspecified, so the current
-  implementation OR-masks reasons to keep checks parallel.
+  implementation reports multi-cause kills as reserved reason `4'hE`.
 - `pkt_formatter`: destination/source addressing and outbound order payload
   schema are unspecified.
 - `hft_engine`: the top-level boundary keeps derived MAC signals internal
@@ -118,4 +118,3 @@ specification or frozen interfaces are incomplete or contradictory:
   explicit spec decision.
 - Do not use loops, latches, or blocking assignments in `always_ff` blocks.
 - Generated VCD/build artifacts are intentionally ignored by Git.
-
