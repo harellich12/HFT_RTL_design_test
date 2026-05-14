@@ -1,0 +1,21 @@
+# Verilator and simulator build output
+obj_dir/
+*.vcd
+*.fst
+*.vvp
+
+# Local flow scratch/output directories
+build/
+out/
+logs/
+
+# Local editor and OS noise
+.vscode/
+.idea/
+*.swp
+*~
+Thumbs.db
+desktop.ini
+
+# Local WSL/session helper state
+.wsl/
