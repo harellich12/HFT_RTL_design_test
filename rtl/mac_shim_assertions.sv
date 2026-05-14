@@ -52,6 +52,15 @@ module mac_shim_assertions (
         !pcs_block_lock |=> (!rx_valid && !rx_sof && !rx_eof && !mac_fcs_valid));
 
     assert property (@(posedge clk_pcs) disable iff (!rst_n)
+        (output_frame_active_r && !pcs_block_lock)
+        |=> (!rx_valid && !rx_sof && !rx_eof && !mac_fcs_valid));
+
+    assert property (@(posedge clk_pcs) disable iff (!rst_n)
+        ($past(output_frame_active_r) && !$past(pcs_block_lock) && pcs_block_lock
+         && !(pcs_rx_valid && (pcs_rxdata == ASSERT_PREAMBLE_SFD_WORD)))
+        |=> (!rx_valid && !rx_sof && !rx_eof && !mac_fcs_valid));
+
+    assert property (@(posedge clk_pcs) disable iff (!rst_n)
         (pcs_rx_valid && pcs_block_lock && (pcs_rxdata == ASSERT_PREAMBLE_SFD_WORD) && !output_frame_active_r)
         |=> (rx_valid && rx_sof && !rx_eof));
 

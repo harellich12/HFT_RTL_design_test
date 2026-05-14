@@ -69,7 +69,7 @@ spec is, where it came from, why it matters, and how the current project address
 | Produce `rx_eof_bytes`. | Original interface. | Downstream final-word handling depends on byte count. | Implemented by priority mapping first control byte to count. |
 | Compute CRC-32/FCS and assert `mac_fcs_valid` with EOF if FCS matches. | Original `mac_shim` section. | Bad inbound frames must not be trusted. | Implemented with rolling four-byte FCS exclusion window. |
 | Do not strip preamble. | Original `mac_shim` section. | Header stripper owns preamble/header removal. | `rx_data` forwards the input word. |
-| Assertion bind coverage. | Original assertion requirement. | Catches SOF/EOF/valid consistency and alignment regressions. | `mac_shim_assertions.sv` exists and lints. |
+| Assertion bind coverage. | Original assertion requirement. | Catches SOF/EOF/valid consistency, block-lock loss, and alignment regressions. | `mac_shim_assertions.sv` exists and lints. |
 | Smoke test coverage. | Current verification. | Confirms block-lock suppression, SOF forwarding, EOF byte count, good FCS, and bad FCS rejection. | `tb/tb_mac_shim.sv` is in the WSL flow. |
 
 ### `mac_shim` Notes
@@ -88,7 +88,7 @@ spec is, where it came from, why it matters, and how the current project address
 | Assume fixed 20-byte IPv4 header; flag options as error. | Original `hdr_stripper` constraints. | Variable IP options would add variable parsing. | IHL check flags non-5 IHL. |
 | Flag EtherType, IP protocol, and short frame errors. | Original `frame_err` description and constraints. | Bad frames must be killed without a flush handshake. | Implemented with same-cycle `frame_err_now` and sticky active error. |
 | Produce `payload_sof`, `payload_valid`, `payload_eof`, and `payload_eof_bytes`. | Original interface. | Maintains streaming contract to field aligner. | Implemented. |
-| Assertion bind coverage. | Original assertion requirement. | Checks valid/SOF/EOF consistency and no-gap behavior. | `hdr_stripper_assertions.sv` exists and lints. |
+| Assertion bind coverage. | Original assertion requirement. | Checks valid/SOF/EOF consistency, bounded payload completion, and no-gap behavior. | `hdr_stripper_assertions.sv` exists and lints. |
 | Smoke test coverage. | Current verification. | Confirms fixed 42-byte strip, 2-byte payload alignment, EOF handling, EtherType/IHL/protocol errors, and short-frame error. | `tb/tb_hdr_stripper.sv` is in the WSL flow. |
 
 ### `hdr_stripper` Spec Gaps
@@ -158,7 +158,7 @@ spec is, where it came from, why it matters, and how the current project address
 | UDP checksum disabled. | Original constraints. | Avoids expensive checksum path. | Template uses UDP checksum field as zero. |
 | Compute and append Ethernet FCS incrementally. | Original constraints. | Produces complete outbound frame without post-buffering. | Implemented. |
 | Emit Ethernet minimum frame size. | Derived Ethernet requirement from formatter implementation review. | Prevents runt frames. | Implemented with two pad bytes before FCS. |
-| Assertion bind coverage. | Original assertion requirement. | Checks launch, no-gap, kill suppression, and EOF behavior. | `pkt_formatter_assertions.sv` exists and lints. |
+| Assertion bind coverage. | Original assertion requirement. | Checks launch, exactly-one SOF per frame, no-gap, kill suppression, and EOF behavior. | `pkt_formatter_assertions.sv` exists and lints. |
 | Smoke test coverage. | Current verification. | Confirms launch, fields, FCS word, kill suppression, idle. | `tb/tb_pkt_formatter.sv` passes. |
 
 ### `pkt_formatter` Spec Gap

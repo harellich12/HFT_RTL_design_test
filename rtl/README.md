@@ -148,12 +148,12 @@ The table values and global kill switch are placeholders because the frozen
 
 | Bind File | Coverage Theme |
 | --- | --- |
-| `mac_shim_assertions.sv` | SOF/EOF validity, block-lock clearing, preamble forwarding, registered data alignment. |
-| `hdr_stripper_assertions.sv` | Payload SOF/EOF validity, no-gap streaming, error suppression behavior. |
+| `mac_shim_assertions.sv` | SOF/EOF validity, block-lock clearing including mid-frame loss, preamble forwarding, registered data alignment. |
+| `hdr_stripper_assertions.sv` | Payload SOF/EOF validity, bounded SOF-to-EOF completion, no-gap streaming, error suppression behavior. |
 | `field_aligner_assertions.sv` | Field valid/error relationship, default extraction correctness, propagated errors. |
 | `sym_id_mapper_assertions.sv` | One-cycle valid timing, identity index behavior, tag miss, field error propagation. |
 | `risk_gate_assertions.sv` | Pass/kill exclusivity, one-cycle decisions, kill reason encoding. |
-| `pkt_formatter_assertions.sv` | One-cycle launch, no TX gaps, kill suppression, EOF shape, raw TX control behavior. |
+| `pkt_formatter_assertions.sv` | One-cycle launch, exactly one SOF per TX frame, no TX gaps, kill suppression, EOF shape, raw TX control behavior. |
 
 ## Current `SPEC_GAP` Items in RTL
 

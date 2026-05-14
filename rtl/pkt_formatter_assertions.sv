@@ -26,8 +26,22 @@ module pkt_formatter_assertions #(
     input logic [2:0]  pcs_tx_eof_bytes
 );
 
+    logic tx_frame_active_r;
+
     default clocking cb @(posedge clk_pcs);
     endclocking
+
+    always_ff @(posedge clk_pcs) begin
+        if (!rst_n) begin
+            tx_frame_active_r <= 1'b0;
+        end else if (risk_kill) begin
+            tx_frame_active_r <= 1'b0;
+        end else if (pcs_tx_valid && pcs_tx_eof) begin
+            tx_frame_active_r <= 1'b0;
+        end else if (pcs_tx_valid && pcs_tx_sof) begin
+            tx_frame_active_r <= 1'b1;
+        end
+    end
 
     property launch_within_one_cycle_from_idle;
         (risk_pass && !risk_kill && !pcs_tx_valid) |=> (pcs_tx_valid && pcs_tx_sof);
@@ -61,6 +75,18 @@ module pkt_formatter_assertions #(
         pcs_tx_valid |-> (pcs_txctl == 8'h00);
     endproperty
 
+    property sof_only_on_first_valid_word;
+        pcs_tx_sof |-> !tx_frame_active_r;
+    endproperty
+
+    property first_valid_word_requires_sof;
+        (pcs_tx_valid && !tx_frame_active_r) |-> pcs_tx_sof;
+    endproperty
+
+    property no_repeated_sof_before_eof;
+        (pcs_tx_valid && tx_frame_active_r && !pcs_tx_eof) |-> !pcs_tx_sof;
+    endproperty
+
     assert property (disable iff (!rst_n) launch_within_one_cycle_from_idle);
     assert property (disable iff (!rst_n) no_gap_between_valid_and_eof);
     assert property (disable iff (!rst_n) eof_requires_valid);
@@ -69,6 +95,9 @@ module pkt_formatter_assertions #(
     assert property (disable iff (!rst_n) kill_suppresses_tx_within_one_cycle);
     assert property (disable iff (!rst_n) eof_has_full_final_word);
     assert property (disable iff (!rst_n) tx_control_idle_for_raw_data_path);
+    assert property (disable iff (!rst_n) sof_only_on_first_valid_word);
+    assert property (disable iff (!rst_n) first_valid_word_requires_sof);
+    assert property (disable iff (!rst_n) no_repeated_sof_before_eof);
 
 endmodule
 

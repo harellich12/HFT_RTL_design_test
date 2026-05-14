@@ -18,6 +18,8 @@ module hdr_stripper_assertions (
     input logic        frame_err
 );
 
+    localparam int ASSERT_MAX_PAYLOAD_WORDS = 256;
+
     logic payload_active_r;
 
     always_ff @(posedge clk_pcs) begin
@@ -49,6 +51,9 @@ module hdr_stripper_assertions (
 
     assert property (@(posedge clk_pcs) disable iff (!rst_n)
         payload_sof |-> !payload_active_r);
+
+    assert property (@(posedge clk_pcs) disable iff (!rst_n)
+        payload_sof |-> ##[0:ASSERT_MAX_PAYLOAD_WORDS] (payload_eof || frame_err));
 
     assert property (@(posedge clk_pcs) disable iff (!rst_n)
         rx_sof |-> rx_valid);
