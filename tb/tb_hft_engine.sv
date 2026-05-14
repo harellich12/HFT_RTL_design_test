@@ -12,6 +12,7 @@ module tb_hft_engine;
     logic [7:0]  pcs_rxctl;
     logic        pcs_rx_valid;
     logic        pcs_block_lock;
+    logic        rx_mac_fcs_valid;
 
     logic [63:0] pcs_txdata;
     logic [7:0]  pcs_txctl;
@@ -49,6 +50,7 @@ module tb_hft_engine;
         .pcs_rxctl(pcs_rxctl),
         .pcs_rx_valid(pcs_rx_valid),
         .pcs_block_lock(pcs_block_lock),
+        .rx_mac_fcs_valid(rx_mac_fcs_valid),
         .pcs_txdata(pcs_txdata),
         .pcs_txctl(pcs_txctl),
         .pcs_tx_valid(pcs_tx_valid),

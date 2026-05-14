@@ -23,6 +23,9 @@ module hft_engine #(
     input  logic        pcs_rx_valid,
     input  logic        pcs_block_lock,
 
+    // RX telemetry
+    output logic        rx_mac_fcs_valid,
+
     // Raw PCS TX
     output logic [63:0] pcs_txdata,
     output logic [7:0]  pcs_txctl,
@@ -82,7 +85,7 @@ module hft_engine #(
         .rx_sof(mac_rx_sof),
         .rx_eof(mac_rx_eof),
         .rx_eof_bytes(mac_rx_eof_bytes),
-        .mac_fcs_valid()
+        .mac_fcs_valid(rx_mac_fcs_valid)
     );
 
     hdr_stripper u_hdr_stripper (

@@ -38,6 +38,7 @@ stages.
 ```mermaid
 flowchart TB
     RX["pcs_rxdata[63:0]\npcs_rxctl[7:0]\npcs_rx_valid\npcs_block_lock"]
+    FCS["rx_mac_fcs_valid\ntelemetry"]
     MOUT["rx_data[63:0]\nrx_valid/rx_sof/rx_eof\nrx_eof_bytes\nmac_fcs_valid"]
     HOUT["payload_data[63:0]\npayload_valid/payload_sof/payload_eof\npayload_eof_bytes\nframe_err"]
     FOUT["instrument_id[63:0]\nprice[63:0]\nquantity[31:0]\nside[7:0]\nfield_valid/field_err"]
@@ -46,6 +47,7 @@ flowchart TB
     TX["pcs_txdata[63:0]\npcs_txctl[7:0]\npcs_tx_valid/sof/eof\npcs_tx_eof_bytes"]
 
     RX --> MOUT --> HOUT --> FOUT --> SOUT --> ROUT --> TX
+    MOUT -.-> FCS
 ```
 
 ## Module Responsibilities
@@ -58,7 +60,12 @@ flowchart TB
 | `sym_id_mapper` | Map 64-bit instrument ID to compact symbol index. | 1 cycle | Placeholder identity/tag behavior until table load ports are specified. |
 | `risk_gate` | Evaluate price, quantity, symbol miss, and upstream error checks in parallel. | 1 cycle | Produces mutually exclusive `risk_pass`/`risk_kill`. |
 | `pkt_formatter` | Format approved tuple into outbound Ethernet/IPv4/UDP order frame. | 1 cycle to SOF | Emits eight 64-bit TX words for the current minimum-size frame template. |
-| `hft_engine` | Integrate pipeline and align sideband fields between stages. | N/A | Raw PCS RX/TX top-level boundary. |
+| `hft_engine` | Integrate pipeline and align sideband fields between stages. | N/A | Raw PCS RX/TX boundary plus RX FCS telemetry. |
+
+`rx_mac_fcs_valid` is intentionally telemetry only. It is asserted when
+`mac_shim` observes a good inbound FCS at EOF, but it does not gate
+`hdr_stripper`, `risk_gate`, or `pkt_formatter`. Gating on FCS would require
+waiting until EOF and would change the cut-through latency model.
 
 ## Integration Microarchitecture
 
@@ -165,7 +172,7 @@ The table values and global kill switch are placeholders because the frozen
 | `risk_gate` | Risk tables and global kill config are required by spec, but no inputs exist. |
 | `risk_gate` | Simultaneous violation priority is unspecified; implementation reports multi-cause kills as `4'hE`. |
 | `pkt_formatter` | Production addressing and order payload schema are unspecified. |
-| `hft_engine` | Top-level raw PCS boundary conflicts with spec text listing derived MAC top-level signals. |
+| `hft_engine` | Top-level raw PCS boundary conflicts with spec text listing derived MAC top-level signals; FCS status is exposed as telemetry while other derived MAC signals remain internal. |
 
 ## Local Lint Commands
 

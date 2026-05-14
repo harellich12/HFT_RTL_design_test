@@ -46,6 +46,7 @@ spec is, where it came from, why it matters, and how the current project address
 | `pcs_rxctl[7:0]` | input | Original raw PCS RX interface. | Marks control characters such as terminate. | Present in `hft_engine`. |
 | `pcs_rx_valid` | input | Original raw PCS RX interface. | Qualifies input word validity. | Present in `hft_engine`. |
 | `pcs_block_lock` | input | Original raw PCS RX interface. | Prevents processing before PCS lock. | Present in `hft_engine`. |
+| `rx_mac_fcs_valid` | output | Derived MAC status from `mac_shim`. | Exposes inbound FCS pass information without gating cut-through trading. | Present as top-level telemetry in `hft_engine`. |
 | `pcs_txdata[63:0]` | output | Original raw PCS TX interface. | Carries outbound data words. | Present in `hft_engine`. |
 | `pcs_txctl[7:0]` | output | Original raw PCS TX interface. | Marks outbound control bytes. | Present in `hft_engine`; formatter currently drives `8'h00`. |
 | `pcs_tx_valid` | output | Original raw PCS TX interface. | Qualifies outbound words. | Present in `hft_engine`. |
@@ -57,7 +58,7 @@ spec is, where it came from, why it matters, and how the current project address
 
 | Gap | Source | Why It Matters | Current Interpretation |
 | --- | --- | --- | --- |
-| The original top-level interface section lists derived MAC signals, but module decomposition requires `mac_shim` inside `hft_engine`. | Original spec sections 2.1 and 3. | The top boundary affects whether MAC decode is external or internal. | `hft_engine` exposes raw PCS RX/TX and keeps derived MAC signals internal. This is marked as `SPEC_GAP` in `hft_engine`. |
+| The original top-level interface section lists derived MAC signals, but module decomposition requires `mac_shim` inside `hft_engine`. | Original spec sections 2.1 and 3. | The top boundary affects whether MAC decode is external or internal. | `hft_engine` exposes raw PCS RX/TX, routes FCS status out as telemetry, and keeps other derived MAC signals internal. This is marked as `SPEC_GAP` in `hft_engine`. |
 
 ## Module Spec: `mac_shim`
 
@@ -174,6 +175,7 @@ spec is, where it came from, why it matters, and how the current project address
 | Instantiate exactly the specified pipeline modules in order. | Original module decomposition. | Ensures no hidden datapath hierarchy or reorder. | Implemented. |
 | Share `clk_pcs` and `rst_n` across all modules. | Original decomposition and coding standards. | Maintains single timing domain. | Implemented. |
 | Align sideband fields across registered mapper and risk stages. | Derived from implemented module latencies. | Prevents `risk_pass` or formatter payload from using mismatched symbol/price/side. | Implemented with sideband registers in `hft_engine`. |
+| Expose RX FCS result without gating the trade path. | Architecture decision on cut-through behavior. | FCS is only known at EOF, after the cut-through order may already launch. | `rx_mac_fcs_valid` is top-level telemetry; it does not feed parser/risk/formatter logic. |
 | Lint with all child RTL and assertion binds. | Current verification requirement. | Catches bind/instance integration issues. | Passes lint-only with `--assert`. |
 
 ## Timing Budget Sheet

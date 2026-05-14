@@ -34,7 +34,7 @@ PCS RX -> mac_shim -> hdr_stripper -> field_aligner -> sym_id_mapper -> risk_gat
 | `sym_id_mapper` | Maps instrument IDs to symbol indexes using the current identity/tag placeholder. |
 | `risk_gate` | Applies parallel price, quantity, symbol miss, and upstream error checks. |
 | `pkt_formatter` | Emits a fixed Ethernet/IPv4/UDP outbound order frame with dynamic order fields and FCS. |
-| `hft_engine` | Integrates the full raw PCS RX/TX pipeline in spec order. |
+| `hft_engine` | Integrates the full raw PCS RX/TX pipeline in spec order and exposes RX FCS status as telemetry. |
 
 Each leaf RTL block has a matching `rtl/*_assertions.sv` bind file.
 
@@ -107,8 +107,9 @@ specification or frozen interfaces are incomplete or contradictory:
   implementation reports multi-cause kills as reserved reason `4'hE`.
 - `pkt_formatter`: destination/source addressing and outbound order payload
   schema are unspecified.
-- `hft_engine`: the top-level boundary keeps derived MAC signals internal
-  because `mac_shim` is instantiated inside the engine.
+- `hft_engine`: the top-level boundary keeps most derived MAC signals internal
+  because `mac_shim` is instantiated inside the engine; RX FCS pass status is
+  exposed as telemetry and does not gate cut-through trading.
 
 ## Development Notes
 
