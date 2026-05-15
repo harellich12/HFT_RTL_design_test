@@ -21,16 +21,28 @@ module hdr_stripper_assertions (
     localparam int ASSERT_MAX_PAYLOAD_WORDS = 256;
 
     logic payload_active_r;
+    logic payload_bound_active_r;
+    logic [8:0] payload_bound_count_r;
 
     always_ff @(posedge clk_pcs) begin
         if (!rst_n) begin
-            payload_active_r <= 1'b0;
+            payload_active_r       <= 1'b0;
+            payload_bound_active_r <= 1'b0;
+            payload_bound_count_r  <= 9'h0;
         end else if (frame_err) begin
-            payload_active_r <= 1'b0;
+            payload_active_r       <= 1'b0;
+            payload_bound_active_r <= 1'b0;
+            payload_bound_count_r  <= 9'h0;
         end else if (payload_valid && payload_eof) begin
-            payload_active_r <= 1'b0;
+            payload_active_r       <= 1'b0;
+            payload_bound_active_r <= 1'b0;
+            payload_bound_count_r  <= 9'h0;
         end else if (payload_valid && payload_sof) begin
-            payload_active_r <= 1'b1;
+            payload_active_r       <= 1'b1;
+            payload_bound_active_r <= 1'b1;
+            payload_bound_count_r  <= 9'h0;
+        end else if (payload_bound_active_r) begin
+            payload_bound_count_r <= payload_bound_count_r + 9'd1;
         end
     end
 
@@ -53,7 +65,7 @@ module hdr_stripper_assertions (
         payload_sof |-> !payload_active_r);
 
     assert property (@(posedge clk_pcs) disable iff (!rst_n)
-        payload_sof |-> ##[0:ASSERT_MAX_PAYLOAD_WORDS] (payload_eof || frame_err));
+        payload_bound_active_r |-> (payload_bound_count_r <= ASSERT_MAX_PAYLOAD_WORDS[8:0]));
 
     assert property (@(posedge clk_pcs) disable iff (!rst_n)
         rx_sof |-> rx_valid);

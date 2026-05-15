@@ -14,6 +14,11 @@ module sym_id_mapper_assertions #(
     input logic                         field_valid,
     input logic                         field_err,
 
+    input logic [SYMBOL_ID_WIDTH-1:0]   sym_cfg_symbol_idx,
+    input logic [64-SYMBOL_ID_WIDTH-1:0] sym_cfg_instrument_tag,
+    input logic                         sym_cfg_entry_valid,
+    input logic                         sym_cfg_valid,
+
     input logic [SYMBOL_ID_WIDTH-1:0]   symbol_idx,
     input logic                         sym_valid,
     input logic                         sym_miss,
@@ -24,12 +29,25 @@ module sym_id_mapper_assertions #(
 
     logic [SYMBOL_ID_WIDTH-1:0] expected_symbol_idx;
     logic [TAG_WIDTH-1:0]       expected_tag;
+    logic [TAG_WIDTH-1:0]       expected_table_tag;
+    logic                       expected_entry_valid;
     logic                       expected_tag_miss;
+    logic [TAG_WIDTH-1:0]       tag_table [SYMBOL_TABLE_DEPTH];
+    logic                       entry_valid_table [SYMBOL_TABLE_DEPTH];
+
+    always_ff @(posedge clk_pcs) begin
+        if (rst_n && sym_cfg_valid) begin
+            tag_table[sym_cfg_symbol_idx]         <= sym_cfg_instrument_tag;
+            entry_valid_table[sym_cfg_symbol_idx] <= sym_cfg_entry_valid;
+        end
+    end
 
     always_comb begin
         expected_symbol_idx = instrument_id[SYMBOL_ID_WIDTH-1:0];
         expected_tag        = instrument_id[63:SYMBOL_ID_WIDTH];
-        expected_tag_miss   = expected_tag != '0;
+        expected_table_tag  = tag_table[expected_symbol_idx];
+        expected_entry_valid = entry_valid_table[expected_symbol_idx];
+        expected_tag_miss   = !expected_entry_valid || (expected_tag != expected_table_tag);
     end
 
     assert property (@(posedge clk_pcs) disable iff (!rst_n)
@@ -67,6 +85,10 @@ bind sym_id_mapper sym_id_mapper_assertions #(
     .instrument_id(instrument_id),
     .field_valid(field_valid),
     .field_err(field_err),
+    .sym_cfg_symbol_idx(sym_cfg_symbol_idx),
+    .sym_cfg_instrument_tag(sym_cfg_instrument_tag),
+    .sym_cfg_entry_valid(sym_cfg_entry_valid),
+    .sym_cfg_valid(sym_cfg_valid),
     .symbol_idx(symbol_idx),
     .sym_valid(sym_valid),
     .sym_miss(sym_miss),

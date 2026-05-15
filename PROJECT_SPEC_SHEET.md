@@ -46,6 +46,10 @@ spec is, where it came from, why it matters, and how the current project address
 | `pcs_rxctl[7:0]` | input | Original raw PCS RX interface. | Marks control characters such as terminate. | Present in `hft_engine`. |
 | `pcs_rx_valid` | input | Original raw PCS RX interface. | Qualifies input word validity. | Present in `hft_engine`. |
 | `pcs_block_lock` | input | Original raw PCS RX interface. | Prevents processing before PCS lock. | Present in `hft_engine`. |
+| `rx_mac_fcs_valid` | output | Derived MAC status from `mac_shim`. | Exposes inbound FCS pass information without gating cut-through trading. | Present as top-level telemetry in `hft_engine`. |
+| `sym_cfg_*` | input | Architecture decision for config gap. | Loads the symbol tag table without adding a datapath bus wrapper. | Present as off-path direct load pins in `hft_engine`. |
+| `risk_cfg_*` | input | Architecture decision for config gap. | Loads per-symbol risk limits without adding a datapath bus wrapper. | Present as off-path direct load pins in `hft_engine`. |
+| `risk_global_kill` | input | Original `risk_gate` constraints. | Provides the required hard kill switch. | Present and synchronously captured by `risk_gate`. |
 | `pcs_txdata[63:0]` | output | Original raw PCS TX interface. | Carries outbound data words. | Present in `hft_engine`. |
 | `pcs_txctl[7:0]` | output | Original raw PCS TX interface. | Marks outbound control bytes. | Present in `hft_engine`; formatter currently drives `8'h00`. |
 | `pcs_tx_valid` | output | Original raw PCS TX interface. | Qualifies outbound words. | Present in `hft_engine`. |
@@ -57,7 +61,7 @@ spec is, where it came from, why it matters, and how the current project address
 
 | Gap | Source | Why It Matters | Current Interpretation |
 | --- | --- | --- | --- |
-| The original top-level interface section lists derived MAC signals, but module decomposition requires `mac_shim` inside `hft_engine`. | Original spec sections 2.1 and 3. | The top boundary affects whether MAC decode is external or internal. | `hft_engine` exposes raw PCS RX/TX and keeps derived MAC signals internal. This is marked as `SPEC_GAP` in `hft_engine`. |
+| The original top-level interface section lists derived MAC signals, but module decomposition requires `mac_shim` inside `hft_engine`. | Original spec sections 2.1 and 3. | The top boundary affects whether MAC decode is external or internal. | `hft_engine` exposes raw PCS RX/TX, routes FCS status out as telemetry, and keeps other derived MAC signals internal. This is marked as `SPEC_GAP` in `hft_engine`. |
 
 ## Module Spec: `mac_shim`
 
@@ -115,8 +119,8 @@ spec is, where it came from, why it matters, and how the current project address
 | Spec | Source | Why It Matters | Current Status |
 | --- | --- | --- | --- |
 | Map 64-bit exchange instrument ID to compact internal symbol index. | Original `sym_id_mapper` section. | Risk and order logic should use small fixed-width indexes. | Implemented as identity lower-bit mapping. |
-| Use direct-mapped lookup indexed by low bits. | Original constraints. | Direct mapping gives deterministic one-cycle lookup. | Placeholder uses low bits as index. |
-| Detect miss/collision by tag mismatch. | Original constraints. | Prevents wrong-symbol risk checks. | Current placeholder treats any nonzero upper tag as miss. |
+| Use direct-mapped lookup indexed by low bits. | Original constraints. | Direct mapping gives deterministic one-cycle lookup. | Implemented with off-path loaded tag and valid tables. |
+| Detect miss/collision by tag mismatch. | Original constraints. | Prevents wrong-symbol risk checks. | Disabled entries or configured tag mismatches assert `sym_miss`. |
 | Propagate `field_err` as `sym_err`. | Original interface. | Upstream parser errors must kill frame. | Implemented. |
 | One-cycle latency from `field_valid` to `sym_valid`. | Original timing table. | Keeps pipeline budget fixed. | Implemented and asserted. |
 | Assertion bind coverage. | Original assertion requirement. | Checks one-cycle valid, index, miss, and error behavior. | `sym_id_mapper_assertions.sv` exists and lints. |
@@ -126,13 +130,13 @@ spec is, where it came from, why it matters, and how the current project address
 
 | Gap | Source | Why It Matters | Current Interpretation |
 | --- | --- | --- | --- |
-| Spec requires reset-time serial table load, but module interface has no load pins. | Original constraints and RTL marker. | Real symbol tables need configuration. | Current RTL uses deterministic identity/tag placeholder until config interface is defined. |
+| Spec requires reset-time serial table load, but does not define the load pins/protocol. | Original constraints and RTL marker. | Real symbol tables need configuration. | Current branch uses direct off-path load pins while the exact serial loader remains undefined. |
 
 ## Module Spec: `risk_gate`
 
 | Spec | Source | Why It Matters | Current Status |
 | --- | --- | --- | --- |
-| Evaluate price floor, price ceiling, quantity limit, kill switch, symbol miss, and upstream error. | Original `risk_gate` table. | Risk gate is the safety-critical block preventing bad orders. | Implemented with current constant stand-in limits and upstream flags. |
+| Evaluate price floor, price ceiling, quantity limit, kill switch, symbol miss, and upstream error. | Original `risk_gate` table. | Risk gate is the safety-critical block preventing bad orders. | Implemented with off-path loaded limit tables, global kill, and upstream flags. |
 | Complete checks in parallel combinational logic and register outputs. | Original constraints. | Avoids priority-chain or iterative latency. | Implemented as parallel violation signals with reserved multi-cause encoding. |
 | `risk_kill` valid one cycle after `sym_valid`. | Original timing table. | Kill latency must be bounded. | Implemented and asserted. |
 | `risk_pass` and `risk_kill` mutually exclusive. | Derived from risk gate interface and safety behavior. | Formatter must never see pass and kill together. | Asserted in `risk_gate_assertions.sv`. |
@@ -144,7 +148,7 @@ spec is, where it came from, why it matters, and how the current project address
 
 | Gap | Source | Why It Matters | Current Interpretation |
 | --- | --- | --- | --- |
-| Risk tables and global kill are required but absent from interface. | Original constraints and RTL marker. | Production risk limits must be configurable. | Current RTL uses constants: floor 10, ceiling 1,000,000, quantity max 1,000, global kill 0. |
+| Risk tables require a reset-load path, but the spec does not define the load pins/protocol. | Original constraints and RTL marker. | Production risk limits must be configurable. | Current branch uses direct off-path load pins plus a synchronously captured global kill input while the exact serial loader remains undefined. |
 | Simultaneous violation priority is unspecified. | Original risk table does not define priority. | Multiple violations can happen in one cycle. | Current RTL reports any multi-cause kill as reserved `4'hE` to avoid aliasing a legal single-cause code. |
 
 ## Module Spec: `pkt_formatter`
@@ -174,6 +178,8 @@ spec is, where it came from, why it matters, and how the current project address
 | Instantiate exactly the specified pipeline modules in order. | Original module decomposition. | Ensures no hidden datapath hierarchy or reorder. | Implemented. |
 | Share `clk_pcs` and `rst_n` across all modules. | Original decomposition and coding standards. | Maintains single timing domain. | Implemented. |
 | Align sideband fields across registered mapper and risk stages. | Derived from implemented module latencies. | Prevents `risk_pass` or formatter payload from using mismatched symbol/price/side. | Implemented with sideband registers in `hft_engine`. |
+| Expose RX FCS result without gating the trade path. | Architecture decision on cut-through behavior. | FCS is only known at EOF, after the cut-through order may already launch. | `rx_mac_fcs_valid` is top-level telemetry; it does not feed parser/risk/formatter logic. |
+| Expose off-path symbol/risk configuration. | Architecture decision on config gaps. | Required tables must be loadable without AXI/AHB/APB in the datapath. | `hft_engine` forwards direct config pins into `sym_id_mapper` and `risk_gate`; live datapath latency is unchanged. |
 | Lint with all child RTL and assertion binds. | Current verification requirement. | Catches bind/instance integration issues. | Passes lint-only with `--assert`. |
 
 ## Timing Budget Sheet
@@ -211,6 +217,7 @@ Interpretation: the downstream decision path from `field_valid` to `tx_sof` is 3
 | Smoke tests for implemented high-risk/current blocks. | Engineering verification need. | Fast regression catches obvious behavioral breaks. | Existing tests cover `mac_shim`, `hdr_stripper`, `field_aligner`, `sym_id_mapper`, `risk_gate`, `pkt_formatter`, and top-level `hft_engine`. |
 | WSL/Linux repeatable flow. | User request and toolchain constraints. | Avoids manual command drift and Windows Make path issues. | `Makefile` and `scripts/run_verilator_flow.sh` exist. |
 | Build outside paths with spaces. | GNU Make/Verilator behavior observed during run. | Verilator generated Makefiles fail under repo path containing spaces. | Flow builds under `/tmp/hft_verilator_flow_$USER`. |
+| Serialized smoke builds by default. | Verilator 5.048 behavior observed during `tb_pkt_formatter` build. | High `-j` values can trip an internal Verilator thread-pool shutdown failure unrelated to RTL behavior. | `scripts/run_verilator_flow.sh` defaults `JOBS=1`; users can override with `JOBS=N`. |
 
 ## WSL Commands
 
@@ -245,11 +252,11 @@ gtkwave tb/hft_engine_smoke.vcd
 
 | Area | Status |
 | --- | --- |
-| Main RTL modules | Complete for current frozen interfaces. |
+| Main RTL modules | Complete for current architecture branch interfaces. |
 | Top-level integration | Complete structurally and lint-clean. |
 | Assertion binds | Complete for existing RTL modules. |
 | Smoke tests | Present for `mac_shim`, `hdr_stripper`, `field_aligner`, `sym_id_mapper`, `risk_gate`, `pkt_formatter`, and top-level `hft_engine`. |
-| WSL flow | Present and used successfully. |
+| WSL/Linux flow | Present; `make test` uses serialized Verilator builds by default. |
 | Spec gaps | Tracked and preserved. |
 | Strict no-loop compliance | `mac_shim` CRC helper is unrolled; no loops are present in synthesizable RTL. |
 | Quant/strategy layer | Not part of current source spec; proposed separately in `STRATEGY_CORE_PROPOSAL.md`. |
@@ -260,6 +267,6 @@ gtkwave tb/hft_engine_smoke.vcd
    - Source: current pipeline parses and risk-checks fields but has no actual quant/alpha decision block.
    - Why important: In production, risk should validate order intent produced by strategy logic, not raw market data fields.
 
-2. Resolve configuration interface gaps.
-   - Source: `sym_id_mapper` and `risk_gate` original specs require reset-time configuration not present in frozen interfaces.
-   - Why important: Placeholder constants are not production trading configuration.
+2. Decide whether direct off-path config pins should remain or be converted into a serial reset loader before merge.
+   - Source: `sym_id_mapper` and `risk_gate` original specs require reset-time configuration but do not define the loader protocol.
+   - Why important: The current branch is functional and latency-neutral, but the exact production programming surface is still an architectural decision.

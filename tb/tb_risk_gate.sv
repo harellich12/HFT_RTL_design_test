@@ -15,6 +15,12 @@ module tb_risk_gate;
     logic                       sym_valid;
     logic                       sym_miss;
     logic                       sym_err;
+    logic [SYMBOL_ID_WIDTH-1:0] risk_cfg_symbol_idx;
+    logic [PRICE_WIDTH-1:0]     risk_cfg_price_floor;
+    logic [PRICE_WIDTH-1:0]     risk_cfg_price_ceil;
+    logic [QTY_WIDTH-1:0]       risk_cfg_qty_max;
+    logic                       risk_cfg_valid;
+    logic                       risk_global_kill;
 
     logic        risk_pass;
     logic        risk_kill;
@@ -36,6 +42,12 @@ module tb_risk_gate;
         .sym_valid(sym_valid),
         .sym_miss(sym_miss),
         .sym_err(sym_err),
+        .risk_cfg_symbol_idx(risk_cfg_symbol_idx),
+        .risk_cfg_price_floor(risk_cfg_price_floor),
+        .risk_cfg_price_ceil(risk_cfg_price_ceil),
+        .risk_cfg_qty_max(risk_cfg_qty_max),
+        .risk_cfg_valid(risk_cfg_valid),
+        .risk_global_kill(risk_global_kill),
         .risk_pass(risk_pass),
         .risk_kill(risk_kill),
         .kill_reason(kill_reason),
@@ -96,9 +108,27 @@ module tb_risk_gate;
         sym_valid  = 1'b0;
         sym_miss   = 1'b0;
         sym_err    = 1'b0;
+        risk_cfg_symbol_idx = '0;
+        risk_cfg_price_floor = '0;
+        risk_cfg_price_ceil = '0;
+        risk_cfg_qty_max = '0;
+        risk_cfg_valid = 1'b0;
+        risk_global_kill = 1'b0;
 
         repeat (3) @(posedge clk_pcs);
         rst_n = 1'b1;
+
+        @(negedge clk_pcs);
+        risk_cfg_symbol_idx  = 10'h155;
+        risk_cfg_price_floor = 64'd10;
+        risk_cfg_price_ceil  = 64'd1_000_000;
+        risk_cfg_qty_max     = 32'd1_000;
+        risk_cfg_valid       = 1'b1;
+
+        @(posedge clk_pcs);
+        #0.1;
+        @(negedge clk_pcs);
+        risk_cfg_valid = 1'b0;
 
         drive_case(64'd100, 32'd100, 1'b0, 1'b0);
         expect_risk(1'b1, 1'b0, 4'h0, 1'b0, "pass");
@@ -117,6 +147,22 @@ module tb_risk_gate;
 
         drive_case(64'd100, 32'd100, 1'b0, 1'b1);
         expect_risk(1'b0, 1'b1, 4'hF, 1'b1, "upstream error");
+
+        @(negedge clk_pcs);
+        risk_global_kill = 1'b1;
+        sym_valid = 1'b0;
+
+        @(posedge clk_pcs);
+        #0.1;
+        drive_case(64'd100, 32'd100, 1'b0, 1'b0);
+        expect_risk(1'b0, 1'b1, 4'h4, 1'b0, "global kill");
+
+        @(negedge clk_pcs);
+        risk_global_kill = 1'b0;
+        sym_valid = 1'b0;
+
+        @(posedge clk_pcs);
+        #0.1;
 
         drive_case(64'd1_000_001, 32'd1_001, 1'b0, 1'b0);
         expect_risk(1'b0, 1'b1, 4'hE, 1'b0, "multi ceiling quantity");

@@ -9,6 +9,10 @@ module tb_sym_id_mapper;
     logic [63:0] instrument_id;
     logic        field_valid;
     logic        field_err;
+    logic [SYMBOL_ID_WIDTH-1:0]    sym_cfg_symbol_idx;
+    logic [64-SYMBOL_ID_WIDTH-1:0] sym_cfg_instrument_tag;
+    logic                          sym_cfg_entry_valid;
+    logic                          sym_cfg_valid;
 
     logic [SYMBOL_ID_WIDTH-1:0] symbol_idx;
     logic        sym_valid;
@@ -24,6 +28,10 @@ module tb_sym_id_mapper;
         .instrument_id(instrument_id),
         .field_valid(field_valid),
         .field_err(field_err),
+        .sym_cfg_symbol_idx(sym_cfg_symbol_idx),
+        .sym_cfg_instrument_tag(sym_cfg_instrument_tag),
+        .sym_cfg_entry_valid(sym_cfg_entry_valid),
+        .sym_cfg_valid(sym_cfg_valid),
         .symbol_idx(symbol_idx),
         .sym_valid(sym_valid),
         .sym_miss(sym_miss),
@@ -65,9 +73,24 @@ module tb_sym_id_mapper;
         instrument_id = 64'h0;
         field_valid   = 1'b0;
         field_err     = 1'b0;
+        sym_cfg_symbol_idx = '0;
+        sym_cfg_instrument_tag = '0;
+        sym_cfg_entry_valid = 1'b0;
+        sym_cfg_valid = 1'b0;
 
         repeat (3) @(posedge clk_pcs);
         rst_n = 1'b1;
+
+        @(negedge clk_pcs);
+        sym_cfg_symbol_idx    = 10'h155;
+        sym_cfg_instrument_tag = '0;
+        sym_cfg_entry_valid   = 1'b1;
+        sym_cfg_valid         = 1'b1;
+
+        @(posedge clk_pcs);
+        #0.1;
+        @(negedge clk_pcs);
+        sym_cfg_valid = 1'b0;
 
         @(negedge clk_pcs);
         instrument_id = 64'h0000_0000_0000_0155;
