@@ -75,6 +75,8 @@ Current verified state:
   observed with high parallelism; override with `JOBS=N make test` only on a
   stable local toolchain.
 
+  <img width="1591" height="904" alt="image" src="https://github.com/user-attachments/assets/4e868c0c-a771-4054-868f-ff9ae6ca9ea8" />
+
 ## Current Timing Snapshot
 
 The nominal integrated smoke path in `tb/tb_hft_engine.sv` records:
