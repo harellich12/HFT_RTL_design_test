@@ -20,6 +20,7 @@ module tb_risk_gate;
     logic [PRICE_WIDTH-1:0]     risk_cfg_price_ceil;
     logic [QTY_WIDTH-1:0]       risk_cfg_qty_max;
     logic                       risk_cfg_valid;
+    logic                       cfg_ready;
     logic                       risk_global_kill;
 
     logic        risk_pass;
@@ -47,6 +48,7 @@ module tb_risk_gate;
         .risk_cfg_price_ceil(risk_cfg_price_ceil),
         .risk_cfg_qty_max(risk_cfg_qty_max),
         .risk_cfg_valid(risk_cfg_valid),
+        .cfg_ready(cfg_ready),
         .risk_global_kill(risk_global_kill),
         .risk_pass(risk_pass),
         .risk_kill(risk_kill),
@@ -54,20 +56,30 @@ module tb_risk_gate;
         .risk_err(risk_err)
     );
 
-    task automatic drive_case (
-        input logic [PRICE_WIDTH-1:0] test_price,
-        input logic [QTY_WIDTH-1:0]   test_quantity,
-        input logic                   test_sym_miss,
-        input logic                   test_sym_err
+    task automatic drive_case_sym (
+        input logic [SYMBOL_ID_WIDTH-1:0] test_symbol_idx,
+        input logic [PRICE_WIDTH-1:0]     test_price,
+        input logic [QTY_WIDTH-1:0]       test_quantity,
+        input logic                       test_sym_miss,
+        input logic                       test_sym_err
     );
         @(negedge clk_pcs);
-        symbol_idx = 10'h155;
+        symbol_idx = test_symbol_idx;
         price      = test_price;
         quantity   = test_quantity;
         side       = 8'h42;
         sym_valid  = 1'b1;
         sym_miss   = test_sym_miss;
         sym_err    = test_sym_err;
+    endtask
+
+    task automatic drive_case (
+        input logic [PRICE_WIDTH-1:0] test_price,
+        input logic [QTY_WIDTH-1:0]   test_quantity,
+        input logic                   test_sym_miss,
+        input logic                   test_sym_err
+    );
+        drive_case_sym(10'h155, test_price, test_quantity, test_sym_miss, test_sym_err);
     endtask
 
     task automatic expect_risk (
@@ -117,6 +129,22 @@ module tb_risk_gate;
 
         repeat (3) @(posedge clk_pcs);
         rst_n = 1'b1;
+
+        // Evaluation during the post-reset init sweep must kill with the
+        // reserved multi-cause reason: the tables are not yet trustworthy.
+        @(negedge clk_pcs);
+        if (cfg_ready !== 1'b0) begin
+            $error("cfg_ready asserted during init sweep");
+            $fatal;
+        end
+        drive_case(64'd100, 32'd100, 1'b0, 1'b0);
+        expect_risk(1'b0, 1'b1, 4'hE, 1'b0, "init sweep kill");
+
+        @(negedge clk_pcs);
+        sym_valid = 1'b0;
+
+        // Wait for the init sweep to finish before loading configuration.
+        wait (cfg_ready === 1'b1);
 
         @(negedge clk_pcs);
         risk_cfg_symbol_idx  = 10'h155;
@@ -172,6 +200,11 @@ module tb_risk_gate;
 
         drive_case(64'd100, 32'd1_001, 1'b0, 1'b1);
         expect_risk(1'b0, 1'b1, 4'hE, 1'b1, "multi quantity upstream error");
+
+        // Symbol never configured after the sweep: fail-safe init limits
+        // (floor=max, ceiling=0, qty=0) must kill as multi-cause, never pass.
+        drive_case_sym(10'h02a, 64'd100, 32'd100, 1'b0, 1'b0);
+        expect_risk(1'b0, 1'b1, 4'hE, 1'b0, "unconfigured symbol kill");
 
         @(negedge clk_pcs);
         sym_valid = 1'b0;

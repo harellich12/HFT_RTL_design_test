@@ -24,6 +24,7 @@ module risk_gate_assertions #(
     input logic [PRICE_WIDTH-1:0]       risk_cfg_price_ceil,
     input logic [QTY_WIDTH-1:0]         risk_cfg_qty_max,
     input logic                         risk_cfg_valid,
+    input logic                         cfg_ready,
     input logic                         risk_global_kill,
 
     input logic                         risk_pass,
@@ -46,14 +47,28 @@ module risk_gate_assertions #(
     logic multi_violation;
     logic in_range_condition;
     logic clean_pass_condition;
+    logic init_mirror_active_r;
+    logic [SYMBOL_ID_WIDTH-1:0] init_mirror_idx_r;
 
+    // Mirror the bound module's post-reset init sweep: config loads issued
+    // during the sweep are ignored and entries start at fail-safe limits.
     always_ff @(posedge clk_pcs) begin
         if (!rst_n) begin
-            global_kill_r <= 1'b0;
+            global_kill_r        <= 1'b0;
+            init_mirror_active_r <= 1'b1;
+            init_mirror_idx_r    <= '0;
         end else begin
             global_kill_r <= risk_global_kill;
 
-            if (risk_cfg_valid) begin
+            if (init_mirror_active_r) begin
+                price_floor_table[init_mirror_idx_r] <= {PRICE_WIDTH{1'b1}};
+                price_ceil_table[init_mirror_idx_r]  <= '0;
+                qty_max_table[init_mirror_idx_r]     <= '0;
+                init_mirror_idx_r <= init_mirror_idx_r + {{(SYMBOL_ID_WIDTH-1){1'b0}}, 1'b1};
+                if (init_mirror_idx_r == {SYMBOL_ID_WIDTH{1'b1}}) begin
+                    init_mirror_active_r <= 1'b0;
+                end
+            end else if (risk_cfg_valid) begin
                 price_floor_table[risk_cfg_symbol_idx] <= risk_cfg_price_floor;
                 price_ceil_table[risk_cfg_symbol_idx]  <= risk_cfg_price_ceil;
                 qty_max_table[risk_cfg_symbol_idx]     <= risk_cfg_qty_max;
@@ -66,9 +81,9 @@ module risk_gate_assertions #(
         price_ceil_limit  = price_ceil_table[symbol_idx];
         qty_max_limit     = qty_max_table[symbol_idx];
 
-        price_floor_violation = price < price_floor_limit;
-        price_ceil_violation  = price > price_ceil_limit;
-        quantity_violation    = quantity > qty_max_limit;
+        price_floor_violation = !init_mirror_active_r && (price < price_floor_limit);
+        price_ceil_violation  = !init_mirror_active_r && (price > price_ceil_limit);
+        quantity_violation    = !init_mirror_active_r && (quantity > qty_max_limit);
         global_kill_violation = global_kill_r;
         multi_violation       = (price_floor_violation && (price_ceil_violation
                                                         || quantity_violation
@@ -89,9 +104,17 @@ module risk_gate_assertions #(
                               && !quantity_violation
                               && !global_kill_violation;
         clean_pass_condition  = in_range_condition
+                              && !init_mirror_active_r
                               && !sym_miss
                               && !sym_err;
     end
+
+    assert property (@(posedge clk_pcs) disable iff (!rst_n)
+        cfg_ready == !init_mirror_active_r);
+
+    assert property (@(posedge clk_pcs) disable iff (!rst_n)
+        (sym_valid && init_mirror_active_r)
+        |=> (!risk_pass && risk_kill && (risk_err == $past(sym_err)) && (kill_reason == 4'hE)));
 
     assert property (@(posedge clk_pcs) disable iff (!rst_n)
         risk_pass |-> !risk_kill);
@@ -124,15 +147,15 @@ module risk_gate_assertions #(
         |=> (!risk_pass && risk_kill && !risk_err && (kill_reason == 4'h3)));
 
     assert property (@(posedge clk_pcs) disable iff (!rst_n)
-        (sym_valid && global_kill_violation && !price_floor_violation && !price_ceil_violation && !quantity_violation && !sym_miss && !sym_err)
+        (sym_valid && !init_mirror_active_r && global_kill_violation && !price_floor_violation && !price_ceil_violation && !quantity_violation && !sym_miss && !sym_err)
         |=> (!risk_pass && risk_kill && !risk_err && (kill_reason == 4'h4)));
 
     assert property (@(posedge clk_pcs) disable iff (!rst_n)
-        (sym_valid && sym_miss && in_range_condition && !sym_err)
+        (sym_valid && !init_mirror_active_r && sym_miss && in_range_condition && !sym_err)
         |=> (!risk_pass && risk_kill && !risk_err && (kill_reason == 4'h5)));
 
     assert property (@(posedge clk_pcs) disable iff (!rst_n)
-        (sym_valid && sym_err && in_range_condition && !sym_miss)
+        (sym_valid && !init_mirror_active_r && sym_err && in_range_condition && !sym_miss)
         |=> (!risk_pass && risk_kill && risk_err && (kill_reason == 4'hF)));
 
     assert property (@(posedge clk_pcs) disable iff (!rst_n)
@@ -160,6 +183,7 @@ bind risk_gate risk_gate_assertions #(
     .risk_cfg_price_ceil(risk_cfg_price_ceil),
     .risk_cfg_qty_max(risk_cfg_qty_max),
     .risk_cfg_valid(risk_cfg_valid),
+    .cfg_ready(cfg_ready),
     .risk_global_kill(risk_global_kill),
     .risk_pass(risk_pass),
     .risk_kill(risk_kill),

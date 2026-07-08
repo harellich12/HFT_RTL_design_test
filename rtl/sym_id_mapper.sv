@@ -19,11 +19,13 @@ module sym_id_mapper #(
     input  logic        field_valid,
     input  logic        field_err,
 
-    // Off-path table load. Load entries while the datapath is quiescent.
+    // Off-path table load. Load entries after cfg_ready while the datapath is
+    // quiescent; loads issued during the post-reset init sweep are ignored.
     input  logic [SYMBOL_ID_WIDTH-1:0]       sym_cfg_symbol_idx,
     input  logic [64-SYMBOL_ID_WIDTH-1:0]    sym_cfg_instrument_tag,
     input  logic                             sym_cfg_entry_valid,
     input  logic                             sym_cfg_valid,
+    output logic                             cfg_ready,
 
     output logic [SYMBOL_ID_WIDTH-1:0] symbol_idx,
     output logic        sym_valid,
@@ -38,18 +40,30 @@ module sym_id_mapper #(
     logic [TAG_WIDTH-1:0]       table_tag;
     logic                       table_entry_valid;
     logic                       tag_miss;
+    logic                       init_active_r;
+    logic [SYMBOL_ID_WIDTH-1:0] init_idx_r;
 
     logic [TAG_WIDTH-1:0] tag_table [SYMBOL_TABLE_DEPTH];
     logic                 entry_valid_table [SYMBOL_TABLE_DEPTH];
 
     always_ff @(posedge clk_pcs) begin
         if (!rst_n) begin
-            symbol_idx <= '0;
-            sym_valid  <= 1'b0;
-            sym_miss   <= 1'b0;
-            sym_err    <= 1'b0;
+            symbol_idx    <= '0;
+            sym_valid     <= 1'b0;
+            sym_miss      <= 1'b0;
+            sym_err       <= 1'b0;
+            init_active_r <= 1'b1;
+            init_idx_r    <= '0;
         end else begin
-            if (sym_cfg_valid) begin
+            // Post-reset init sweep: invalidate one entry per cycle so every
+            // table cell holds a defined value without a synthesizable loop.
+            if (init_active_r) begin
+                entry_valid_table[init_idx_r] <= 1'b0;
+                init_idx_r                    <= init_idx_r + {{(SYMBOL_ID_WIDTH-1){1'b0}}, 1'b1};
+                if (init_idx_r == {SYMBOL_ID_WIDTH{1'b1}}) begin
+                    init_active_r <= 1'b0;
+                end
+            end else if (sym_cfg_valid) begin
                 tag_table[sym_cfg_symbol_idx]         <= sym_cfg_instrument_tag;
                 entry_valid_table[sym_cfg_symbol_idx] <= sym_cfg_entry_valid;
             end
@@ -62,6 +76,8 @@ module sym_id_mapper #(
     end
 
     always_comb begin
+        cfg_ready = !init_active_r;
+
         symbol_idx_next = instrument_id[SYMBOL_ID_WIDTH-1:0];
         instrument_tag  = instrument_id[63:SYMBOL_ID_WIDTH];
         table_tag       = tag_table[symbol_idx_next];
@@ -70,7 +86,10 @@ module sym_id_mapper #(
         // SPEC_GAP: The spec calls for a reset-time serial loader but does not
         // define its pins. This direct load port is intentionally off-path and is
         // expected to be used only during reset/quiescent configuration.
-        tag_miss = !table_entry_valid || (instrument_tag != table_tag);
+        // Lookups during the init sweep miss deterministically.
+        tag_miss = init_active_r
+                || !table_entry_valid
+                || (instrument_tag != table_tag);
     end
 
 endmodule

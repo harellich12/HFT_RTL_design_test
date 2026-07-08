@@ -1,7 +1,7 @@
 # Block Context Handoff
 
 This file is the lightweight session-to-session handoff for block-level RTL work.
-It does not replace `AGENTS.md` or `HFT_RTL_System_Spec_Prompt.md`; read those first
+It does not replace `agents.md` or `HFT_RTL_System_Spec_Prompt.md`; read those first
 before changing RTL.
 
 ## Project Goal
@@ -68,24 +68,105 @@ Latest WSL top-level smoke result from `tb_hft_engine`:
 Existing `// SPEC_GAP:` markers are intentional and should remain until the spec
 or interfaces are clarified:
 
+- `mac_shim`: the spec's `[0=8, 1..7=N]` EOF bytecount encoding cannot represent a
+  terminate in lane 0 at the raw PCS boundary; `rx_eof_bytes` is the exact
+  EOF-word data byte count (0..7) and `hdr_stripper` consumes the same encoding.
 - `hdr_stripper`: numeric definition of bad length.
 - `hdr_stripper`: causal conflict between stripping preamble/header bytes and the written 2-cycle `rx_sof` to `payload_valid` budget.
-- `sym_id_mapper`: serial table load required by spec; current branch uses direct off-path load pins while the serial protocol remains undefined.
-- `risk_gate`: serial risk table load required by spec; current branch uses direct off-path load pins and a global kill input while the serial protocol remains undefined.
+- `sym_id_mapper`: serial table load required by spec; current branch uses direct off-path load pins plus a post-reset init sweep (`cfg_ready` when done) while the serial protocol remains undefined.
+- `risk_gate`: serial risk table load required by spec; current branch uses direct off-path load pins, a post-reset fail-safe init sweep (`cfg_ready` when done), and a global kill input while the serial protocol remains undefined.
 - `risk_gate`: simultaneous violation priority is unspecified; current RTL reports multi-cause kills as `4'hE`.
 - `pkt_formatter`: destination/source addressing and outbound order payload schema are unspecified.
 - `hft_engine`: top-level boundary keeps most derived MAC signals internal because `mac_shim` is instantiated inside the engine; FCS status is exposed as telemetry.
 
+## Phase 1 Hardening (2026-07-08)
+
+Correctness fixes landed after a full-project review; all lint and smoke tests pass:
+
+1. FCS wire order in `mac_shim` and `pkt_formatter` corrected to IEEE 802.3
+   (bit-reversed CRC bytes, MSB byte first). Verified against independent
+   `zlib.crc32` known-answer vectors hardcoded in `tb_mac_shim` and
+   `tb_pkt_formatter`. The old mapping was self-consistent but rejected every
+   real-world frame and emitted frames a real MAC would drop.
+2. `rx_eof_bytes` contract unified: exact EOF-word data byte count (0..7).
+   `hdr_stripper` previously decoded 0 as 8 valid bytes and marked garbage
+   bytes valid on frames ending at a word boundary.
+3. `field_aligner` now takes `payload_eof_bytes` and checks byte-granular field
+   availability, so truncated payloads raise `field_err` instead of validating
+   garbage fields; the payload word counter saturates instead of wrapping on
+   long payloads.
+4. `sym_id_mapper` and `risk_gate` run a post-reset init sweep (one entry per
+   cycle) so no table cell is ever read undefined; both expose `cfg_ready`
+   (ANDed at `hft_engine` top). Unconfigured symbols deterministically miss/kill.
+5. `.gitattributes` forces LF on `Makefile`/`*.sh` so the WSL flow works from a
+   Windows clone with `core.autocrlf=true`.
+
+All changes are latency-neutral: the smoke-measured pipeline is unchanged
+(13 cycles `mac_sof` to `tx_sof`, 3-cycle decision path).
+
+## Architecture Decisions (2026-07-08)
+
+Recorded from review discussion; these are settled unless explicitly reopened:
+
+| Decision | Choice | Rationale |
+| --- | --- | --- |
+| TX wire framing ownership | `pkt_formatter` emits full raw-PCS framing itself (preamble/SFD word, terminate control word). No separate `tx_shim`, no external TX MAC assumption. | Keeps the raw-PCS boundary symmetric with `mac_shim`, keeps module count per spec, zero decision-latency cost (framing words land after launch). |
+| In-flight kill policy | Complete in-flight approved frames; kill gates new launches only. Late inbound FCS failure or global kill invalidates an in-flight order by FCS stomp (inverted outbound FCS). | "Philosophy 2": never truncate (illegal runt), never delay launch waiting for FCS (kills cut-through). Residual risk: an order fully transmitted before the bad-FCS verdict cannot be recalled. |
+| Config loading | Direct off-path pins + init sweep + `cfg_ready` stay. Serial loader deferred until the FPGA bring-up defines the real host-side programming interface. | Avoid inventing a loader protocol the spec does not define and the target platform may contradict. |
+| Strategy core | Separate later track. Production strategy will be true RTL; a C++ reference model is for verification only (DPI checker), not the datapath. | See STRATEGY_CORE_PROPOSAL.md staging. |
+
+## Phase 2 Hardening (2026-07-08)
+
+TX wire legality and kill-path safety landed; all lint and smoke tests pass:
+
+1. `pkt_formatter` emits a complete 10-word raw-PCS burst: preamble/SFD word,
+   five header words, two order-field words, IEEE FCS word, terminate control
+   word (`pcs_txctl = 8'hFF`, /T/ in lane 0). The TX stream is now a legal
+   input for the design's own RX conventions. `tx_sof` marks the preamble word
+   and still lands one cycle after `risk_pass`; `tx_sof` to `tx_eof` grew from
+   7 to 9 cycles (framing words only, decision path unchanged at 13 cycles).
+2. Kill semantics fixed: `risk_kill` gates new launches only; an in-flight
+   frame is never truncated (previously any kill mid-frame produced an illegal
+   partial frame on the wire). Documented as a formatter `SPEC_GAP`.
+3. FCS stomp: new `tx_abort` input inverts the outbound FCS of the in-flight
+   frame so the receiving MAC drops it. `hft_engine` drives it on global kill
+   and on late inbound FCS failure when the frame's decision already launched.
+4. Late-FCS launch suppression: when a bad inbound FCS arrives before the
+   frame's risk decision (short frames - the common case), `hft_engine` masks
+   that decision's `risk_pass` so the bad order never launches. Verified at
+   top level with a corrupt-FCS frame: decision fires, no TX frame appears.
+5. Telemetry: `risk_kill_reason`, `risk_err`, `tx_launch_drops` (busy-drop
+   counter), and `tx_stomps` are now top-level outputs.
+6. `tb_hft_engine` now sends frames with real IEEE FCS bytes (zlib-verified
+   known answers) plus a corrupt-FCS suppression case; `tb_pkt_formatter`
+   covers busy re-launch drop, mid-frame abort/stomp, kill-mid-frame
+   non-truncation, and kill/abort at idle.
+7. `make waves` (`MOD=<block>`) opens a smoke VCD in gtkwave.
+
+Known conservative corners (documented in RTL comments, revisit with OMS work):
+
+- A bad-FCS frame that dies before any risk decision leaves the launch
+  suppression armed for the next decision (drops one good order; fail-safe).
+- If a launch was dropped while an older frame was transmitting, a late FCS
+  abort for the dropped frame stomps the older in-flight frame (fail-safe).
+
+Proper fix for both requires per-frame IDs, which arrives with the order
+manager in the strategy track.
+
 ## Next Recommended Work
 
-1. Decide whether the direct off-path config pins should become a serial reset loader before merging.
-2. Resolve or formalize the formatter packet schema.
+1. Resolve or formalize the formatter packet schema (addressing + payload).
+2. Strategy track stage 1 per `STRATEGY_CORE_PROPOSAL.md`: stateless
+   msg_type-gated `strategy_core` proving risk checks order intent.
+3. Serial config loader: deferred until FPGA host interface is chosen.
+4. Verification uplift (Phase 3): randomized frames + scoreboard, formal on
+   risk_gate kill path, coverage, CI.
 
 ## Session Checklist
 
 Before editing any RTL in a future block session:
 
-1. Read `AGENTS.md`.
+1. Read `agents.md`.
 2. Read `HFT_RTL_System_Spec_Prompt.md`.
 3. Read this file.
 4. Work on one module only unless explicitly told otherwise.

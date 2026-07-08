@@ -31,10 +31,10 @@ PCS RX -> mac_shim -> hdr_stripper -> field_aligner -> sym_id_mapper -> risk_gat
 | `mac_shim` | Detects SOF/EOF, forwards preamble/SFD, computes RX FCS, and uses unrolled CRC logic. |
 | `hdr_stripper` | Strips fixed Ethernet/IPv4/UDP headers and aligns UDP payload words. |
 | `field_aligner` | Extracts typed fields from static payload offsets in the first 24 payload bytes. |
-| `sym_id_mapper` | Maps instrument IDs to symbol indexes through an off-path loaded direct-mapped tag table. |
-| `risk_gate` | Applies off-path loaded price/quantity limits, global kill, symbol miss, and upstream error checks in parallel. |
-| `pkt_formatter` | Emits a fixed Ethernet/IPv4/UDP outbound order frame with dynamic order fields and FCS. |
-| `hft_engine` | Integrates the full raw PCS RX/TX pipeline in spec order and exposes RX FCS status as telemetry. |
+| `sym_id_mapper` | Maps instrument IDs to symbol indexes through an off-path loaded direct-mapped tag table; a post-reset init sweep invalidates every entry and lookups miss until `cfg_ready`. |
+| `risk_gate` | Applies off-path loaded price/quantity limits, global kill, symbol miss, and upstream error checks in parallel; a post-reset init sweep writes fail-safe limits so unconfigured symbols always kill. |
+| `pkt_formatter` | Emits a complete raw-PCS order frame: preamble/SFD, fixed Ethernet/IPv4/UDP template with dynamic order fields, IEEE FCS, and terminate control word. Never truncates an in-flight frame; `tx_abort` invalidates one by FCS stomp. |
+| `hft_engine` | Integrates the full raw PCS RX/TX pipeline in spec order. A late inbound FCS failure suppresses the pending order launch or stomps the outbound FCS of the order already on the wire; global kill also stomps in-flight frames. Exposes kill reason, risk error, and drop/stomp counters. |
 
 Each leaf RTL block has a matching `rtl/*_assertions.sv` bind file.
 
@@ -56,6 +56,16 @@ scripts/run_verilator_flow.sh test
 scripts/run_verilator_flow.sh all
 scripts/run_verilator_flow.sh clean
 ```
+
+`make test` writes one `tb/<module>_smoke.vcd` per block. View a waveform with:
+
+```bash
+make waves              # opens tb/hft_engine_smoke.vcd
+make waves MOD=risk_gate  # opens a specific leaf block
+```
+
+`make waves` shells out to `gtkwave` (override with `WAVE_VIEWER=`). On Windows
+run it from WSL; WSLg supplies the X display so the viewer window opens directly.
 
 The flow builds under `/tmp/hft_verilator_flow_<user>` by default because
 Verilator-generated Makefiles can be awkward when the repository path contains
@@ -89,7 +99,11 @@ The nominal integrated smoke path in `tb/tb_hft_engine.sv` records:
 | `sym_valid` to risk decision | 1 | 6.4 ns |
 | Risk decision to `tx_sof` | 1 | 6.4 ns |
 | `mac_sof` to `tx_sof` | 13 | 83.2 ns |
-| `tx_sof` to `tx_eof` | 7 | 44.8 ns |
+| `tx_sof` to `tx_eof` | 9 | 57.6 ns |
+
+The outbound burst is 10 words: preamble/SFD, five header words, two order
+field words, the FCS word, and a terminate control word. The added framing
+words land after the launch decision, so the decision path is unchanged.
 
 The downstream decision path from `field_valid` to `tx_sof` is three cycles.
 The larger front-end number is dominated by causal byte arrival for the fixed
@@ -100,6 +114,9 @@ headers and required payload fields.
 The current RTL preserves explicit `// SPEC_GAP:` comments where the original
 specification or frozen interfaces are incomplete or contradictory:
 
+- `mac_shim`: the spec encodes the EOF bytecount as `[0=8, 1..7=N]`, but at the
+  raw PCS boundary the terminate control character occupies a byte lane, so the
+  EOF word carries 0..7 data bytes and `rx_eof_bytes` is the exact count.
 - `hdr_stripper`: bad-length behavior is not numerically defined.
 - `hdr_stripper`: the written two-cycle `rx_sof` to `payload_valid` budget
   conflicts with stripping an in-stream preamble plus 42 header bytes.
@@ -113,6 +130,10 @@ specification or frozen interfaces are incomplete or contradictory:
   implementation reports multi-cause kills as reserved reason `4'hE`.
 - `pkt_formatter`: destination/source addressing and outbound order payload
   schema are unspecified.
+- `pkt_formatter`: the spec's "risk_kill resets state within 1 cycle" and "no
+  partial frames" conflict once frames pipeline; kill is applied at launch
+  only, in-flight frames always complete, and `tx_abort`/FCS stomp handles
+  in-flight invalidation.
 - `hft_engine`: the top-level boundary keeps most derived MAC signals internal
   because `mac_shim` is instantiated inside the engine; RX FCS pass status is
   exposed as telemetry and does not gate cut-through trading.

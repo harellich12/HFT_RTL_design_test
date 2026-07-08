@@ -22,6 +22,8 @@ module field_aligner #(
     input  logic        payload_valid,
     input  logic        payload_sof,
     input  logic        payload_eof,
+    // Valid bytes in the final payload word, encoded [0=8, 1..7=N].
+    input  logic [2:0]  payload_eof_bytes,
     input  logic        frame_err,
 
     // Extracted fields - registered, valid when field_valid asserted
@@ -72,6 +74,7 @@ module field_aligner #(
     logic        align_err_now;
     logic        field_err_next;
     logic [WORD_CNT_WIDTH-1:0] current_word_idx;
+    logic [3:0]  current_word_bytes;
     logic [5:0]  payload_bytes_available;
     logic [WINDOW_BYTES*8-1:0] payload_window;
 
@@ -115,7 +118,9 @@ module field_aligner #(
                 frame_err_r        <= frame_err;
                 fields_captured_r  <= 1'b0;
             end else if (payload_valid) begin
-                if (!payload_eof) begin
+                // Saturate at the window depth: indexes past the third word all
+                // select the same full-window view, so the count must not wrap.
+                if (!payload_eof && (payload_word_cnt_r != {WORD_CNT_WIDTH{1'b1}})) begin
                     payload_word_cnt_r <= payload_word_cnt_r + {{(WORD_CNT_WIDTH-1){1'b0}}, 1'b1};
                 end
 
@@ -142,7 +147,13 @@ module field_aligner #(
 
     always_comb begin
         current_word_idx = payload_sof ? '0 : payload_word_cnt_r;
-        payload_bytes_available = ({4'h0, current_word_idx} + 6'd1) << 3;
+        // Byte-granular availability: a partial final word only contributes its
+        // valid bytes, so fields ending in the padded region cannot validate.
+        current_word_bytes = (payload_eof && (payload_eof_bytes != 3'd0))
+                           ? {1'b0, payload_eof_bytes}
+                           : 4'd8;
+        payload_bytes_available = ({4'h0, current_word_idx} << 3)
+                                + {2'b00, current_word_bytes};
 
         unique case (current_word_idx)
             2'd0: payload_window = {128'h0, payload_data};
@@ -152,6 +163,7 @@ module field_aligner #(
 
         align_err_now = payload_valid
                      && payload_eof
+                     && !fields_captured_r
                      && (payload_bytes_available < MAX_FIELD_BYTES[5:0]);
         field_err_next = frame_err_r || frame_err || align_err_now;
 

@@ -49,7 +49,10 @@ spec is, where it came from, why it matters, and how the current project address
 | `rx_mac_fcs_valid` | output | Derived MAC status from `mac_shim`. | Exposes inbound FCS pass information without gating cut-through trading. | Present as top-level telemetry in `hft_engine`. |
 | `sym_cfg_*` | input | Architecture decision for config gap. | Loads the symbol tag table without adding a datapath bus wrapper. | Present as off-path direct load pins in `hft_engine`. |
 | `risk_cfg_*` | input | Architecture decision for config gap. | Loads per-symbol risk limits without adding a datapath bus wrapper. | Present as off-path direct load pins in `hft_engine`. |
-| `risk_global_kill` | input | Original `risk_gate` constraints. | Provides the required hard kill switch. | Present and synchronously captured by `risk_gate`. |
+| `risk_global_kill` | input | Original `risk_gate` constraints. | Provides the required hard kill switch. | Present and synchronously captured by `risk_gate`; also FCS-stomps any frame in flight. |
+| `cfg_ready` | output | Architecture decision for table init. | Marks completion of both post-reset table init sweeps; config loads issued earlier are ignored. | Present; AND of mapper and risk sweep completion. |
+| `risk_kill_reason[3:0]`, `risk_err` | output | Kill-path observability. | A risk gate whose kill reasons are invisible is unauditable. | Present; driven directly by `risk_gate`. |
+| `tx_launch_drops[15:0]`, `tx_stomps[15:0]` | output | TX safety telemetry. | Silent order drops and FCS stomps must be visible to operations. | Present; saturating counters from `pkt_formatter`. |
 | `pcs_txdata[63:0]` | output | Original raw PCS TX interface. | Carries outbound data words. | Present in `hft_engine`. |
 | `pcs_txctl[7:0]` | output | Original raw PCS TX interface. | Marks outbound control bytes. | Present in `hft_engine`; formatter currently drives `8'h00`. |
 | `pcs_tx_valid` | output | Original raw PCS TX interface. | Qualifies outbound words. | Present in `hft_engine`. |
@@ -70,8 +73,8 @@ spec is, where it came from, why it matters, and how the current project address
 | Detect preamble/SFD word `0x55_55_55_55_55_55_55_D5` on wire order. | Original `mac_shim` section. | Defines exact start-of-frame boundary. | Implemented using constant `64'hD5_55_55_55_55_55_55_55`. |
 | Assert `rx_sof` on the registered output cycle for SFD detection. | Original `mac_shim` latency requirement. | Downstream modules use SOF to start fixed-offset parsing. | Implemented with one output register stage. |
 | Detect PCS terminate via nonzero `pcs_rxctl`. | Original `mac_shim` section. | Defines end-of-frame boundary. | Implemented as `eof_detect = pcs_rxctl != 8'h00` while frame active. |
-| Produce `rx_eof_bytes`. | Original interface. | Downstream final-word handling depends on byte count. | Implemented by priority mapping first control byte to count. |
-| Compute CRC-32/FCS and assert `mac_fcs_valid` with EOF if FCS matches. | Original `mac_shim` section. | Bad inbound frames must not be trusted. | Implemented with rolling four-byte FCS exclusion window. |
+| Produce `rx_eof_bytes`. | Original interface. | Downstream final-word handling depends on byte count. | Implemented by priority mapping first control byte to count; the value is the exact EOF-word data byte count (0..7), see spec gap below. |
+| Compute CRC-32/FCS and assert `mac_fcs_valid` with EOF if FCS matches. | Original `mac_shim` section. | Bad inbound frames must not be trusted. | Implemented with rolling four-byte FCS exclusion window; FCS wire order matches IEEE 802.3 and is checked against an independent known-answer vector in `tb_mac_shim`. |
 | Do not strip preamble. | Original `mac_shim` section. | Header stripper owns preamble/header removal. | `rx_data` forwards the input word. |
 | Assertion bind coverage. | Original assertion requirement. | Catches SOF/EOF/valid consistency, block-lock loss, and alignment regressions. | `mac_shim_assertions.sv` exists and lints. |
 | Smoke test coverage. | Current verification. | Confirms block-lock suppression, SOF forwarding, EOF byte count, good FCS, and bad FCS rejection. | `tb/tb_mac_shim.sv` is in the WSL flow. |
@@ -82,6 +85,12 @@ spec is, where it came from, why it matters, and how the current project address
 | --- | --- | --- |
 | CRC helper uses explicitly unrolled bit steps. | RTL implementation. | Satisfies the original rule prohibiting loops in synthesizable modules. |
 | SOF/preamble word is admitted into the stream. | Original `mac_shim` section. | Preserves the requirement that `mac_shim` does not strip the preamble. |
+
+### `mac_shim` Spec Gap
+
+| Gap | Source | Why It Matters | Current Interpretation |
+| --- | --- | --- | --- |
+| The spec encodes EOF bytecount as `[0=8, 1..7=N]`, which cannot represent a terminate in lane 0. | Original interface section 2.1 versus raw PCS behavior. | At this boundary the terminate control character occupies a byte lane, so the EOF word carries 0..7 data bytes and never 8; a frame ending on a word boundary produces a zero-byte EOF word. | `rx_eof_bytes` is the exact data byte count (0..7) equal to the terminate lane index. `hdr_stripper` consumes the same encoding. |
 
 ## Module Spec: `hdr_stripper`
 
@@ -130,7 +139,7 @@ spec is, where it came from, why it matters, and how the current project address
 
 | Gap | Source | Why It Matters | Current Interpretation |
 | --- | --- | --- | --- |
-| Spec requires reset-time serial table load, but does not define the load pins/protocol. | Original constraints and RTL marker. | Real symbol tables need configuration. | Current branch uses direct off-path load pins while the exact serial loader remains undefined. |
+| Spec requires reset-time serial table load, but does not define the load pins/protocol. | Original constraints and RTL marker. | Real symbol tables need configuration. | Current branch uses direct off-path load pins while the exact serial loader remains undefined. A post-reset init sweep invalidates every entry (one per cycle); lookups during the sweep miss deterministically and `cfg_ready` marks sweep completion. |
 
 ## Module Spec: `risk_gate`
 
@@ -148,15 +157,16 @@ spec is, where it came from, why it matters, and how the current project address
 
 | Gap | Source | Why It Matters | Current Interpretation |
 | --- | --- | --- | --- |
-| Risk tables require a reset-load path, but the spec does not define the load pins/protocol. | Original constraints and RTL marker. | Production risk limits must be configurable. | Current branch uses direct off-path load pins plus a synchronously captured global kill input while the exact serial loader remains undefined. |
+| Risk tables require a reset-load path, but the spec does not define the load pins/protocol. | Original constraints and RTL marker. | Production risk limits must be configurable. | Current branch uses direct off-path load pins plus a synchronously captured global kill input while the exact serial loader remains undefined. A post-reset init sweep writes fail-safe limits (floor=max, ceiling=0, quantity=0) to every entry, so unconfigured symbols always kill; evaluations during the sweep kill with reserved reason `4'hE` and `cfg_ready` marks sweep completion. |
 | Simultaneous violation priority is unspecified. | Original risk table does not define priority. | Multiple violations can happen in one cycle. | Current RTL reports any multi-cause kill as reserved `4'hE` to avoid aliasing a legal single-cause code. |
 
 ## Module Spec: `pkt_formatter`
 
 | Spec | Source | Why It Matters | Current Status |
 | --- | --- | --- | --- |
-| Begin outbound frame no later than one cycle after `risk_pass`. | Original `pkt_formatter` constraints. | Final stage must not add avoidable latency. | Implemented and asserted. |
-| Suppress all output on `risk_kill` and reset state within one cycle. | Original constraints. | Prevents partial or bad orders. | Implemented and asserted. |
+| Begin outbound frame no later than one cycle after `risk_pass`. | Original `pkt_formatter` constraints. | Final stage must not add avoidable latency. | Implemented and asserted; `pcs_tx_sof` marks the preamble word, one cycle after `risk_pass`. |
+| Suppress all output on `risk_kill` and reset state within one cycle. | Original constraints. | Prevents partial or bad orders. | Reinterpreted (see spec gap): kill suppresses the launch of the frame being decided; in-flight frames always complete, and `tx_abort` FCS-stomps them instead. Asserted both ways. |
+| Emit a wire-legal raw PCS stream: preamble/SFD word and terminate control word. | Architecture decision (2026-07-08): formatter owns TX framing. | Without framing the outbound stream is not receivable by any MAC, including this design's own RX side. | Implemented: 10-word burst, `pcs_txctl = 8'hFF` with /T/ on the terminate word, symmetric with `mac_shim` decode. |
 | Use static outbound Ethernet/IP/UDP template. | Original constraints. | Static template avoids runtime header construction latency. | Implemented with fixed template words. |
 | Substitute symbol, price, quantity, and side. | Original constraints. | Carries order data into outbound packet. | Implemented in 16-byte payload plus pad. |
 | UDP checksum disabled. | Original constraints. | Avoids expensive checksum path. | Template uses UDP checksum field as zero. |
@@ -165,11 +175,12 @@ spec is, where it came from, why it matters, and how the current project address
 | Assertion bind coverage. | Original assertion requirement. | Checks launch, exactly-one SOF per frame, no-gap, kill suppression, and EOF behavior. | `pkt_formatter_assertions.sv` exists and lints. |
 | Smoke test coverage. | Current verification. | Confirms launch, fields, FCS word, kill suppression, idle. | `tb/tb_pkt_formatter.sv` passes. |
 
-### `pkt_formatter` Spec Gap
+### `pkt_formatter` Spec Gaps
 
 | Gap | Source | Why It Matters | Current Interpretation |
 | --- | --- | --- | --- |
 | Destination/source addressing and outbound order payload schema are not defined. | Original formatter section. | Real exchange/order target format must be precise. | Current RTL uses fixed placeholder Ethernet/IP/UDP template and a compact symbol/price/quantity/side payload. |
+| "risk_kill resets state within 1 cycle" conflicts with "no partial frames" once frames pipeline. | Original formatter constraints. | A kill decided for frame N+1 while frame N is transmitting would truncate frame N into an illegal partial frame. | Kill applies at launch only; in-flight frames always complete. `tx_abort` inverts the outbound FCS (stomp) so a receiver drops an in-flight frame that must be invalidated. |
 
 ## Module Spec: `hft_engine`
 
@@ -205,7 +216,7 @@ Measured by `tb/tb_hft_engine.sv` on the nominal pass-path frame at 156.25 MHz:
 | `sym_valid` to risk decision | 1 | 6.4 ns | Confirms the risk gate decision stage is at its specified one-cycle budget. |
 | Risk decision to `tx_sof` | 1 | 6.4 ns | Confirms the formatter launches at its specified one-cycle budget after pass. |
 | `mac_sof` to `tx_sof` | 13 | 83.2 ns | Current observed start-to-start latency for the integrated pipeline. This exceeds the original headline 7-cycle budget because the original budget conflicts with the byte arrival point of the required fields. |
-| `tx_sof` to `tx_eof` | 7 | 44.8 ns | Confirms the formatter emits the complete minimum-size outbound frame in a fixed deterministic burst. |
+| `tx_sof` to `tx_eof` | 9 | 57.6 ns | Confirms the formatter emits the complete wire-legal outbound frame (preamble through terminate, 10 words) in a fixed deterministic burst. The framing words land after the launch decision, so decision latency is unchanged. |
 
 Interpretation: the downstream decision path from `field_valid` to `tx_sof` is 3 cycles and already matches the per-stage RTL budgets. The larger `mac_sof` to `tx_sof` number is dominated by front-end byte arrival and fixed-offset parsing, not by avoidable buffering in the mapper, risk gate, or formatter.
 
@@ -222,11 +233,15 @@ Interpretation: the downstream decision path from `field_valid` to `tx_sof` is 3
 ## WSL Commands
 
 ```bash
-cd "/mnt/c/Users/harel/OneDrive/Desktop/AI Coding/HFT design"
+cd "/mnt/c/Users/Harel-PC/OneDrive - IESE Business School/Desktop/AI Tests/HFT_RTL_design_test"
 
 make lint
 make test
 ```
+
+Both commands must pass before any RTL change is considered done. A
+`.gitattributes` forces LF endings on `Makefile` and `*.sh` so the flow works
+from a Windows clone with `core.autocrlf=true`.
 
 Optional:
 

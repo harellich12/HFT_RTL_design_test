@@ -208,6 +208,62 @@ module tb_hdr_stripper;
                          1'b1, 1'b0, 1'b1, 3'h0, 1'b0);
     endtask
 
+    // Frame ends exactly on a word boundary: the terminate lane is byte 0, so
+    // the EOF word carries zero data bytes (rx_eof_bytes = 0 means 0, not 8).
+    // The final payload word must expose only the 6-byte alignment tail.
+    task automatic send_word_boundary_eof_frame;
+        send_valid_header_prefix(16'h0800, 4'h5, 8'h11);
+
+        drive_and_expect("wb payload prealign", pack8(8'h00, 8'h00,
+                                                      8'h12, 8'h34, 8'h00, 8'h00, 8'h00, 8'h00),
+                         1'b1, 1'b0, 1'b0, 3'h0,
+                         64'h0, 1'b0, 1'b0, 1'b0, 3'h0, 1'b0);
+
+        drive_and_expect("wb payload word0", pack8(8'h00, 8'h00, 8'h01, 8'h55,
+                                                   8'h00, 8'h00, 8'h00, 8'h00),
+                         1'b1, 1'b0, 1'b0, 3'h0,
+                         pack8(8'h12, 8'h34, 8'h00, 8'h00,
+                               8'h00, 8'h00, 8'h00, 8'h00),
+                         1'b1, 1'b1, 1'b0, 3'h0, 1'b0);
+
+        drive_and_expect("wb eof zero-byte word", pack8(8'hDE, 8'hAD, 8'hDE, 8'hAD,
+                                                        8'hDE, 8'hAD, 8'hDE, 8'hAD),
+                         1'b1, 1'b0, 1'b1, 3'd0,
+                         pack8(8'h01, 8'h55, 8'h00, 8'h00,
+                               8'h00, 8'h00, 8'hDE, 8'hAD),
+                         1'b1, 1'b0, 1'b1, 3'd6, 1'b0);
+    endtask
+
+    // EOF word carries 5 data bytes (> the 2-byte header remainder): the last
+    // realigned word is full, and a one-cycle flush emits the 3-byte tail.
+    task automatic send_flush_tail_frame;
+        send_valid_header_prefix(16'h0800, 4'h5, 8'h11);
+
+        drive_and_expect("flush payload prealign", pack8(8'h00, 8'h00,
+                                                         8'h12, 8'h34, 8'h00, 8'h00, 8'h00, 8'h00),
+                         1'b1, 1'b0, 1'b0, 3'h0,
+                         64'h0, 1'b0, 1'b0, 1'b0, 3'h0, 1'b0);
+
+        drive_and_expect("flush payload word0", pack8(8'h00, 8'h00, 8'h01, 8'h55,
+                                                      8'h00, 8'h00, 8'h00, 8'h00),
+                         1'b1, 1'b0, 1'b0, 3'h0,
+                         pack8(8'h12, 8'h34, 8'h00, 8'h00,
+                               8'h00, 8'h00, 8'h00, 8'h00),
+                         1'b1, 1'b1, 1'b0, 3'h0, 1'b0);
+
+        drive_and_expect("flush eof word", pack8(8'hA0, 8'hA1, 8'hA2, 8'hA3,
+                                                 8'hA4, 8'hDE, 8'hAD, 8'hDE),
+                         1'b1, 1'b0, 1'b1, 3'd5,
+                         pack8(8'h01, 8'h55, 8'h00, 8'h00,
+                               8'h00, 8'h00, 8'hA0, 8'hA1),
+                         1'b1, 1'b0, 1'b0, 3'h0, 1'b0);
+
+        drive_and_expect("flush tail word", 64'h0, 1'b0, 1'b0, 1'b0, 3'h0,
+                         pack8(8'hA2, 8'hA3, 8'hA4, 8'hDE,
+                               8'hAD, 8'hDE, 8'h00, 8'h00),
+                         1'b1, 1'b0, 1'b1, 3'd3, 1'b0);
+    endtask
+
     task automatic send_short_frame;
         drive_and_expect("short preamble", 64'hD5_55_55_55_55_55_55_55, 1'b1, 1'b1, 1'b0, 3'h0,
                          64'h0, 1'b0, 1'b0, 1'b0, 3'h0, 1'b0);
@@ -234,6 +290,12 @@ module tb_hdr_stripper;
         reset_dut();
         drive_idle();
         send_nominal_frame();
+
+        reset_dut();
+        send_word_boundary_eof_frame();
+
+        reset_dut();
+        send_flush_tail_frame();
 
         reset_dut();
         send_valid_header_prefix(16'h0806, 4'h5, 8'h11);

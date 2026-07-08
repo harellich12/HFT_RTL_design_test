@@ -18,6 +18,7 @@ module sym_id_mapper_assertions #(
     input logic [64-SYMBOL_ID_WIDTH-1:0] sym_cfg_instrument_tag,
     input logic                         sym_cfg_entry_valid,
     input logic                         sym_cfg_valid,
+    input logic                         cfg_ready,
 
     input logic [SYMBOL_ID_WIDTH-1:0]   symbol_idx,
     input logic                         sym_valid,
@@ -32,11 +33,24 @@ module sym_id_mapper_assertions #(
     logic [TAG_WIDTH-1:0]       expected_table_tag;
     logic                       expected_entry_valid;
     logic                       expected_tag_miss;
+    logic                       init_mirror_active_r;
+    logic [SYMBOL_ID_WIDTH-1:0] init_mirror_idx_r;
     logic [TAG_WIDTH-1:0]       tag_table [SYMBOL_TABLE_DEPTH];
     logic                       entry_valid_table [SYMBOL_TABLE_DEPTH];
 
+    // Mirror the bound module's post-reset init sweep: config loads issued
+    // during the sweep are ignored and every entry is invalidated once.
     always_ff @(posedge clk_pcs) begin
-        if (rst_n && sym_cfg_valid) begin
+        if (!rst_n) begin
+            init_mirror_active_r <= 1'b1;
+            init_mirror_idx_r    <= '0;
+        end else if (init_mirror_active_r) begin
+            entry_valid_table[init_mirror_idx_r] <= 1'b0;
+            init_mirror_idx_r <= init_mirror_idx_r + {{(SYMBOL_ID_WIDTH-1){1'b0}}, 1'b1};
+            if (init_mirror_idx_r == {SYMBOL_ID_WIDTH{1'b1}}) begin
+                init_mirror_active_r <= 1'b0;
+            end
+        end else if (sym_cfg_valid) begin
             tag_table[sym_cfg_symbol_idx]         <= sym_cfg_instrument_tag;
             entry_valid_table[sym_cfg_symbol_idx] <= sym_cfg_entry_valid;
         end
@@ -47,8 +61,13 @@ module sym_id_mapper_assertions #(
         expected_tag        = instrument_id[63:SYMBOL_ID_WIDTH];
         expected_table_tag  = tag_table[expected_symbol_idx];
         expected_entry_valid = entry_valid_table[expected_symbol_idx];
-        expected_tag_miss   = !expected_entry_valid || (expected_tag != expected_table_tag);
+        expected_tag_miss   = init_mirror_active_r
+                           || !expected_entry_valid
+                           || (expected_tag != expected_table_tag);
     end
+
+    assert property (@(posedge clk_pcs) disable iff (!rst_n)
+        cfg_ready == !init_mirror_active_r);
 
     assert property (@(posedge clk_pcs) disable iff (!rst_n)
         (!field_valid) |=> (!sym_valid && !sym_miss && !sym_err));
@@ -89,6 +108,7 @@ bind sym_id_mapper sym_id_mapper_assertions #(
     .sym_cfg_instrument_tag(sym_cfg_instrument_tag),
     .sym_cfg_entry_valid(sym_cfg_entry_valid),
     .sym_cfg_valid(sym_cfg_valid),
+    .cfg_ready(cfg_ready),
     .symbol_idx(symbol_idx),
     .sym_valid(sym_valid),
     .sym_miss(sym_miss),

@@ -13,6 +13,7 @@ module tb_sym_id_mapper;
     logic [64-SYMBOL_ID_WIDTH-1:0] sym_cfg_instrument_tag;
     logic                          sym_cfg_entry_valid;
     logic                          sym_cfg_valid;
+    logic                          cfg_ready;
 
     logic [SYMBOL_ID_WIDTH-1:0] symbol_idx;
     logic        sym_valid;
@@ -32,6 +33,7 @@ module tb_sym_id_mapper;
         .sym_cfg_instrument_tag(sym_cfg_instrument_tag),
         .sym_cfg_entry_valid(sym_cfg_entry_valid),
         .sym_cfg_valid(sym_cfg_valid),
+        .cfg_ready(cfg_ready),
         .symbol_idx(symbol_idx),
         .sym_valid(sym_valid),
         .sym_miss(sym_miss),
@@ -81,6 +83,25 @@ module tb_sym_id_mapper;
         repeat (3) @(posedge clk_pcs);
         rst_n = 1'b1;
 
+        // Lookup during the post-reset init sweep must miss deterministically.
+        @(negedge clk_pcs);
+        if (cfg_ready !== 1'b0) begin
+            $error("cfg_ready asserted during init sweep");
+            $fatal;
+        end
+        instrument_id = 64'h0000_0000_0000_0155;
+        field_valid   = 1'b1;
+
+        @(posedge clk_pcs);
+        #0.1;
+        expect_symbol(10'h155, 1'b1, 1'b1, 1'b0, "init sweep miss");
+
+        @(negedge clk_pcs);
+        field_valid = 1'b0;
+
+        // Wait for the init sweep to finish before loading configuration.
+        wait (cfg_ready === 1'b1);
+
         @(negedge clk_pcs);
         sym_cfg_symbol_idx    = 10'h155;
         sym_cfg_instrument_tag = '0;
@@ -109,6 +130,16 @@ module tb_sym_id_mapper;
         @(posedge clk_pcs);
         #0.1;
         expect_symbol(10'h155, 1'b1, 1'b1, 1'b0, "tag miss");
+
+        // Entry never configured after the sweep: must miss, not read undefined.
+        @(negedge clk_pcs);
+        instrument_id = 64'h0000_0000_0000_0300;
+        field_valid   = 1'b1;
+        field_err     = 1'b0;
+
+        @(posedge clk_pcs);
+        #0.1;
+        expect_symbol(10'h300, 1'b1, 1'b1, 1'b0, "unconfigured entry miss");
 
         @(negedge clk_pcs);
         instrument_id = 64'h0000_0000_0000_002a;
