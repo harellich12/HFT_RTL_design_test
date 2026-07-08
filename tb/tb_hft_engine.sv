@@ -132,8 +132,12 @@ module tb_hft_engine;
     // Drive one full market-data frame: preamble/SFD, fixed Ethernet/IP/UDP
     // header (EtherType 0x0800, IHL 5, protocol 0x11), 24 payload bytes, then
     // the 4-byte FCS with terminate in lane 6 of the final word.
+    // trailing_idle=1 deasserts the bus for one word after EOF, so two
+    // consecutive calls are spaced by one idle word; trailing_idle=0 lets the
+    // next call's preamble follow the EOF word back-to-back with zero gap.
     task automatic send_market_frame (
-        input logic corrupt_fcs
+        input logic corrupt_fcs,
+        input logic trailing_idle
     );
         logic [31:0] fcs_bytes;
         begin
@@ -165,10 +169,12 @@ module tb_hft_engine;
                                  fcs_bytes[23:16], fcs_bytes[31:24],
                                  8'h00, 8'h00), 8'b0100_0000);
 
-            @(negedge clk_pcs);
-            pcs_rx_valid = 1'b0;
-            pcs_rxctl    = 8'h0;
-            pcs_rxdata   = 64'h0;
+            if (trailing_idle) begin
+                @(negedge clk_pcs);
+                pcs_rx_valid = 1'b0;
+                pcs_rxctl    = 8'h0;
+                pcs_rxdata   = 64'h0;
+            end
         end
     endtask
 
@@ -294,7 +300,7 @@ module tb_hft_engine;
         pcs_block_lock = 1'b1;
 
         // First frame: valid IEEE FCS. The order must launch.
-        send_market_frame(1'b0);
+        send_market_frame(1'b0, 1'b1);
 
         repeat (30) @(posedge clk_pcs);
 
@@ -328,7 +334,7 @@ module tb_hft_engine;
 
         // Second frame: corrupt FCS. The risk decision still happens, but the
         // launch must be suppressed: no second frame on the TX bus.
-        send_market_frame(1'b1);
+        send_market_frame(1'b1, 1'b1);
 
         repeat (30) @(posedge clk_pcs);
 
@@ -345,6 +351,64 @@ module tb_hft_engine;
         if ((tx_stomps !== 16'h0) || (tx_launch_drops !== 16'h0)) begin
             $error("unexpected telemetry: tx_stomps=%0d tx_launch_drops=%0d",
                    tx_stomps, tx_launch_drops);
+            $fatal;
+        end
+
+        // Back-to-back frames separated by one idle word (minimum realistic
+        // post-IFG spacing): both orders must launch. The second decision
+        // lands exactly one cycle after the first TX burst frees the bus.
+        send_market_frame(1'b0, 1'b1);
+        send_market_frame(1'b0, 1'b1);
+
+        repeat (40) @(posedge clk_pcs);
+
+        if (risk_decision_count != 4) begin
+            $error("gap-1 pair: expected 4 total risk decisions, saw %0d",
+                   risk_decision_count);
+            $fatal;
+        end
+
+        if (tx_sof_count != 3) begin
+            $error("gap-1 pair: expected 3 total tx frames, saw %0d", tx_sof_count);
+            $fatal;
+        end
+
+        if (tx_launch_drops !== 16'h0) begin
+            $error("gap-1 pair: unexpected launch drop, tx_launch_drops=%0d",
+                   tx_launch_drops);
+            $fatal;
+        end
+
+        // Zero-gap frames (tighter than legal IFG allows): the RX pipeline
+        // parses both cleanly and both orders launch. The 10-word TX burst is
+        // exactly rate-matched to the 10-word minimum inbound frame, so the
+        // second launch lands the cycle the formatter frees and the two TX
+        // bursts butt-join with no drop.
+        send_market_frame(1'b0, 1'b0);
+        send_market_frame(1'b0, 1'b1);
+
+        repeat (40) @(posedge clk_pcs);
+
+        if (risk_decision_count != 6) begin
+            $error("zero-gap pair: expected 6 total risk decisions, saw %0d",
+                   risk_decision_count);
+            $fatal;
+        end
+
+        if (tx_sof_count != 5) begin
+            $error("zero-gap pair: expected 5 total tx frames, saw %0d",
+                   tx_sof_count);
+            $fatal;
+        end
+
+        if (tx_launch_drops !== 16'h0) begin
+            $error("zero-gap pair: unexpected launch drop, tx_launch_drops=%0d",
+                   tx_launch_drops);
+            $fatal;
+        end
+
+        if (tx_stomps !== 16'h0) begin
+            $error("zero-gap pair: unexpected stomp, tx_stomps=%0d", tx_stomps);
             $fatal;
         end
 

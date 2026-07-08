@@ -153,14 +153,28 @@ Known conservative corners (documented in RTL comments, revisit with OMS work):
 Proper fix for both requires per-frame IDs, which arrives with the order
 manager in the strategy track.
 
+## Phase 3 Start (2026-07-08)
+
+1. GitHub Actions CI (`.github/workflows/ci.yml`): `make lint` + `make test`
+   on ubuntu-24.04 (Verilator 5.020, matching WSL) for every push/PR.
+2. Back-to-back frame coverage in `tb_hft_engine`: a gap-1 pair and a
+   zero-gap pair both launch all orders. Measured finding: the 10-word TX
+   burst is exactly rate-matched to the 10-word minimum inbound frame, so
+   consecutive TX bursts butt-join and the engine sustains minimum-size
+   frames at full line rate with zero drops. `tx_launch_drops` can only
+   trigger if TX frames grow longer than the smallest inbound spacing
+   (e.g., a future larger order template), which is exactly what the
+   counter is there to catch.
+
 ## Next Recommended Work
 
 1. Resolve or formalize the formatter packet schema (addressing + payload).
 2. Strategy track stage 1 per `STRATEGY_CORE_PROPOSAL.md`: stateless
    msg_type-gated `strategy_core` proving risk checks order intent.
 3. Serial config loader: deferred until FPGA host interface is chosen.
-4. Verification uplift (Phase 3): randomized frames + scoreboard, formal on
-   risk_gate kill path, coverage, CI.
+4. Verification uplift (Phase 3 remainder): randomized frames + scoreboard,
+   formal on risk_gate kill path, coverage. FPGA synthesis probe (yosys) to
+   size the risk-table memory question.
 
 ## Session Checklist
 

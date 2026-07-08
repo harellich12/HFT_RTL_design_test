@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(wsl -e bash -lc 'cd \"/mnt/c/Users/Harel-PC/OneDrive - IESE Business School/Desktop/AI Tests/HFT_RTL_design_test\" && make lint >/dev/null 2>&1 && echo \"LINT PASS\"; make test > /tmp/hft_test_out.log 2>&1; echo \"test exit: $?\"; grep -c \"Verilog .finish\" /tmp/hft_test_out.log; grep -E \"%Error|Aborting|expected\" /tmp/hft_test_out.log | head -8')",
+      "Bash(wsl -e bash -lc 'cd \"/mnt/c/Users/Harel-PC/OneDrive - IESE Business School/Desktop/AI Tests/HFT_RTL_design_test\" && make test > /tmp/hft_test_out.log 2>&1; echo \"test exit: $?\"; grep -c \"Verilog .finish\" /tmp/hft_test_out.log; grep -E \"%Error|Aborting\" /tmp/hft_test_out.log | head -5; grep -E \"tx_sof -> tx_eof|mac_sof -> tx_sof\" /tmp/hft_test_out.log')"
+    ]
+  }
+}

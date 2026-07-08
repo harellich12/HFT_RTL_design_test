@@ -40,6 +40,9 @@ Each leaf RTL block has a matching `rtl/*_assertions.sv` bind file.
 
 ## Verification
 
+GitHub Actions runs `make lint` and `make test` on every push and pull
+request (`.github/workflows/ci.yml`, ubuntu-24.04 / Verilator 5.020).
+
 The repo is set up for Verilator. From a Linux/WSL-style shell with `verilator`,
 `make`, and a C++ compiler installed:
 
