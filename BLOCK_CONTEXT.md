@@ -166,6 +166,35 @@ manager in the strategy track.
    (e.g., a future larger order template), which is exactly what the
    counter is there to catch.
 
+## FPGA Synthesis Probe (2026-07-09)
+
+Yosys 0.66 `synth_xilinx` (7-series, via sv2v because yosys' SV frontend does
+not support `return` in functions), whole `hft_engine`, default parameters:
+
+| Module | Logic LUTs | FFs | RAM64M (LUTRAM) |
+| --- | ---: | ---: | ---: |
+| `risk_gate` | 1269 | 19 | 880 |
+| `sym_id_mapper` | 441 | 24 | 304 |
+| `mac_shim` | 1059 | 139 | 0 |
+| `pkt_formatter` | 698 | 251 | 0 |
+| `field_aligner` | 201 | 318 | 0 |
+| `hdr_stripper` | 120 | 70 | 0 |
+| Total | ~3.8k | ~1.0k | 1184 (~4.7k LUTRAM LUTs) |
+
+Findings:
+
+- Total footprint ~8.5k LUTs (logic + LUTRAM); fits even an Artix-7 35T with
+  room to spare, negligible on any transceiver-bearing part.
+- Zero BRAM inferred: the async-read tables map to distributed RAM, which
+  preserves the 1-cycle lookup budget. Keep this structure; do not convert to
+  BRAM (registered read would cost a pipeline cycle per lookup stage).
+- Timing risk to verify in vendor STA at the FPGA milestone: the risk_gate
+  single-cycle path LUTRAM read -> 16:1 mux tree -> 64-bit compares -> kill
+  reduction at 6.4 ns. yosys gives no timing; Vivado will.
+- The unrolled CRC (mac_shim ~1.1k LUTs, pkt_formatter ~0.7k) is the largest
+  pure-logic block but registered-output only; no concern.
+- Strategy stage 1 param table (~35b x 1024) would add roughly 200 RAM64M.
+
 ## Next Recommended Work
 
 1. Resolve or formalize the formatter packet schema (addressing + payload).
