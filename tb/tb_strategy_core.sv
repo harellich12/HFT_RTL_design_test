@@ -78,6 +78,15 @@ module tb_strategy_core;
 
     int unsigned checked_count;
 
+    // Golden-model verdict, latched to module scope so it lands in the VCD:
+    // in gtkwave, stack these under the DUT's order_* outputs and the traces
+    // must agree on every checked cycle. Encoding: 0=idle, 1=valid,
+    // 2=suppress, 3=err (matches StrategyDecision in strategy_ref_model.cpp).
+    logic [1:0]  model_decision;
+    logic [7:0]  model_side;
+    logic [31:0] model_qty;
+    logic        model_checked;
+
     strategy_core #(
         .SYMBOL_TABLE_DEPTH(SYMBOL_TABLE_DEPTH),
         .SYMBOL_ID_WIDTH(SYMBOL_ID_WIDTH),
@@ -171,6 +180,11 @@ module tb_strategy_core;
             {24'h0, chk_side},
             exp_side,
             exp_qty);
+
+        model_decision = exp_decision[1:0];
+        model_side     = exp_side[7:0];
+        model_qty      = exp_qty[31:0];
+        model_checked  = 1'b1;
 
         checked_count++;
 
@@ -270,6 +284,10 @@ module tb_strategy_core;
         strat_cfg_valid          = 1'b0;
         rand_state    = 32'hC0FFEE01;
         checked_count = 0;
+        model_decision = 2'h0;
+        model_side     = 8'h0;
+        model_qty      = 32'h0;
+        model_checked  = 1'b0;
 
         for (int i = 0; i < SYMBOL_TABLE_DEPTH; i++) begin
             tb_enable[i] = 1'b0;
