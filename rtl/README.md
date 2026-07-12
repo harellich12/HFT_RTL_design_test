@@ -12,7 +12,8 @@ flowchart LR
     MAC --> HDR["hdr_stripper\nEther/IP/UDP strip"]
     HDR --> FIELD["field_aligner\nstatic field extraction"]
     FIELD --> MAP["sym_id_mapper\ninstrument -> symbol"]
-    MAP --> RISK["risk_gate\nparallel checks"]
+    MAP --> STRAT["strategy_core\norder intent"]
+    STRAT --> RISK["risk_gate\nparallel checks"]
     RISK --> FMT["pkt_formatter\noutbound frame + FCS"]
     FMT --> PCS_TX["PCS TX\n64-bit data + ctl"]
 ```
@@ -58,7 +59,8 @@ flowchart TB
 | `hdr_stripper` | Remove preamble plus fixed Ethernet/IPv4/UDP headers and align UDP payload. | Causal stream latency | Emits payload when enough header bytes have arrived; see spec gap below. |
 | `field_aligner` | Extract typed fields from static UDP payload offsets and byte-swap once. | 1-3 payload words | Current fields reach byte 23, so default layout completes on payload word 3. |
 | `sym_id_mapper` | Map 64-bit instrument ID to compact symbol index. | 1 cycle | Direct-mapped tag table loaded through off-path config pins. |
-| `risk_gate` | Evaluate price, quantity, global kill, symbol miss, and upstream error checks in parallel. | 1 cycle | Risk limits are loaded through off-path config pins; decision outputs remain mutually exclusive. |
+| `strategy_core` | Convert normalized market data into order intent (Stage-1 take-liquidity policy). | 1 cycle | Configured tradeable msg_type + per-symbol enable/side-policy/quantity table; every market update resolves to exactly one of order/suppress/error. Golden C++ model in `verif/` checked via DPI. |
+| `risk_gate` | Evaluate price, quantity, global kill, symbol miss, and upstream error checks in parallel on the strategy's order intent. | 1 cycle | Risk limits are loaded through off-path config pins; decision outputs remain mutually exclusive. |
 | `pkt_formatter` | Format approved tuple into a complete raw-PCS order frame. | 1 cycle to SOF | Emits ten 64-bit TX words: preamble/SFD, headers, order fields, FCS, terminate control word. In-flight frames are never truncated; `tx_abort` stomps the FCS instead. |
 | `hft_engine` | Integrate pipeline, align sideband fields, own late-FCS/kill policy. | N/A | Raw PCS RX/TX boundary. Late bad inbound FCS suppresses the pending launch or stomps the in-flight order; exposes kill reason, risk error, and drop/stomp counters. |
 
@@ -105,15 +107,15 @@ The latest integrated smoke measurement at 156.25 MHz is:
 | `mac_sof` to `payload_sof` | 7 | 44.8 ns |
 | `payload_sof` to `field_valid` | 3 | 19.2 ns |
 | `field_valid` to `sym_valid` | 1 | 6.4 ns |
-| `sym_valid` to risk decision | 1 | 6.4 ns |
+| `sym_valid` to risk decision (through `strategy_core`) | 2 | 12.8 ns |
 | Risk decision to `tx_sof` | 1 | 6.4 ns |
-| `mac_sof` to `tx_sof` | 13 | 83.2 ns |
+| `mac_sof` to `tx_sof` | 14 | 89.6 ns |
 | `tx_sof` to `tx_eof` | 9 | 57.6 ns |
 
-The decision path after all fields are available is three cycles:
+The decision path after all fields are available is four cycles:
 
 ```text
-field_valid -> sym_valid -> risk_pass/risk_kill -> pcs_tx_sof
+field_valid -> sym_valid -> order_valid -> risk_pass/risk_kill -> pcs_tx_sof
 ```
 
 The larger `mac_sof` to `tx_sof` number is dominated by the causal need to
@@ -180,6 +182,7 @@ vectors in `tb_mac_shim` and `tb_pkt_formatter`.
 | `hdr_stripper_assertions.sv` | Payload SOF/EOF validity, bounded SOF-to-EOF completion, no-gap streaming, error suppression behavior. |
 | `field_aligner_assertions.sv` | Field valid/error relationship, default extraction correctness, propagated errors. |
 | `sym_id_mapper_assertions.sv` | One-cycle valid timing, config-backed index/tag behavior, tag miss, field error propagation. |
+| `strategy_core_assertions.sv` | Exactly-one-of order/suppress/error per market update, config-mirrored decision and field correctness, cfg_ready/init sweep tracking. |
 | `risk_gate_assertions.sv` | Pass/kill exclusivity, config-backed one-cycle decisions, global kill, kill reason encoding. |
 | `pkt_formatter_assertions.sv` | One-cycle launch, exactly one SOF per TX frame, no TX gaps, kill-at-launch-only (in-flight frames never truncate), preamble on SOF, terminate control on EOF, fixed 10-word frame length. |
 

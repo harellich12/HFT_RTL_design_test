@@ -195,15 +195,40 @@ Findings:
   pure-logic block but registered-output only; no concern.
 - Strategy stage 1 param table (~35b x 1024) would add roughly 200 RAM64M.
 
+## Strategy Stage 1 (2026-07-12)
+
+`strategy_core` implemented per the approved answer sheet and inserted between
+`sym_id_mapper` and `risk_gate`; risk now validates order intent:
+
+1. Decision policy: take liquidity only; one configured tradeable `msg_type`
+   register; per-symbol `{enable, side_policy[1:0], qty}` parameter table with
+   the standard init sweep + `cfg_ready` (ANDed into the top-level pin). Side
+   policies: same / opposite / fixed-buy / fixed-sell; a side-dependent policy
+   with an unrecognized market side suppresses rather than guessing.
+2. Determinism contract (asserted): every `market_valid` resolves to exactly
+   one of `order_valid` / `order_suppress` / `order_err` one cycle later.
+3. Latency: +1 cycle as approved; smoke-measured `mac_sof -> tx_sof` is now
+   14 cycles (89.6 ns); `tx_sof -> tx_eof` unchanged at 9. Zero-gap
+   back-to-back frames still butt-join on TX (launch frees in time).
+4. hft_engine changes: `msg_type` sideband captured at `field_valid`;
+   `sym_miss` delayed one cycle to pair with the order-intent cycle; risk
+   sidebands capture from `order_*`; the late-FCS bookkeeping treats
+   `order_suppress` as a resolution (a suppressed frame consumes the
+   suppression window like a risk decision would).
+5. Verification pattern for the whole strategy track established:
+   `verif/strategy_ref_model.cpp` is the bit-accurate C++ golden model,
+   compiled into `tb_strategy_core` via DPI and compared on every decision
+   cycle - directed cases plus a deterministic xorshift32 random stream
+   (~315 checked cycles). The RTL and the model must change together.
+
 ## Next Recommended Work
 
 1. Resolve or formalize the formatter packet schema (addressing + payload).
-2. Strategy track stage 1 per `STRATEGY_CORE_PROPOSAL.md`: stateless
-   msg_type-gated `strategy_core` proving risk checks order intent.
+2. Strategy stage 2 per `STRATEGY_CORE_PROPOSAL.md` staging: per-symbol
+   market state (best bid/offer, last trade) updated from inbound data.
 3. Serial config loader: deferred until FPGA host interface is chosen.
-4. Verification uplift (Phase 3 remainder): randomized frames + scoreboard,
-   formal on risk_gate kill path, coverage. FPGA synthesis probe (yosys) to
-   size the risk-table memory question.
+4. Verification uplift (Phase 3 remainder): randomized frames + scoreboard at
+   the engine top, formal on risk_gate kill path, coverage.
 
 ## Session Checklist
 

@@ -81,6 +81,10 @@ lint_rtl() {
         rtl/risk_gate.sv \
         rtl/risk_gate_assertions.sv
 
+    run_cmd "$verilator_bin" --lint-only --timing --assert --top-module strategy_core \
+        rtl/strategy_core.sv \
+        rtl/strategy_core_assertions.sv
+
     run_cmd "$verilator_bin" --lint-only --timing --assert --top-module pkt_formatter \
         rtl/pkt_formatter.sv \
         rtl/pkt_formatter_assertions.sv
@@ -95,6 +99,8 @@ lint_rtl() {
         rtl/field_aligner_assertions.sv \
         rtl/sym_id_mapper.sv \
         rtl/sym_id_mapper_assertions.sv \
+        rtl/strategy_core.sv \
+        rtl/strategy_core_assertions.sv \
         rtl/risk_gate.sv \
         rtl/risk_gate_assertions.sv \
         rtl/pkt_formatter.sv \
@@ -127,6 +133,11 @@ lint_tests() {
         rtl/risk_gate.sv \
         rtl/risk_gate_assertions.sv
 
+    run_cmd "$verilator_bin" --lint-only --timing --assert --top-module tb_strategy_core -Irtl \
+        tb/tb_strategy_core.sv \
+        rtl/strategy_core.sv \
+        rtl/strategy_core_assertions.sv
+
     run_cmd "$verilator_bin" --lint-only --timing --assert --top-module tb_pkt_formatter -Irtl \
         tb/tb_pkt_formatter.sv \
         rtl/pkt_formatter.sv \
@@ -143,6 +154,8 @@ lint_tests() {
         rtl/field_aligner_assertions.sv \
         rtl/sym_id_mapper.sv \
         rtl/sym_id_mapper_assertions.sv \
+        rtl/strategy_core.sv \
+        rtl/strategy_core_assertions.sv \
         rtl/risk_gate.sv \
         rtl/risk_gate_assertions.sv \
         rtl/pkt_formatter.sv \
@@ -213,6 +226,22 @@ run_tests() {
 
     run_cmd "${build_root}/tb_risk_gate/Vtb_risk_gate"
 
+    mkdir -p "${build_root}/tb_strategy_core"
+
+    # Verilator's generated Makefile resolves user C++ files from the build
+    # directory, and the repo path may contain spaces, so stage the DPI
+    # reference model into the space-free build root first.
+    run_cmd cp verif/strategy_ref_model.cpp "${build_root}/tb_strategy_core/"
+
+    run_cmd "$verilator_bin" --binary --timing --assert --trace --Mdir "${build_root}/tb_strategy_core" \
+        --top-module tb_strategy_core -Irtl -j "$jobs" \
+        tb/tb_strategy_core.sv \
+        rtl/strategy_core.sv \
+        rtl/strategy_core_assertions.sv \
+        "${build_root}/tb_strategy_core/strategy_ref_model.cpp"
+
+    run_cmd "${build_root}/tb_strategy_core/Vtb_strategy_core"
+
     mkdir -p "${build_root}/tb_pkt_formatter"
 
     run_cmd "$verilator_bin" --binary --timing --assert --trace --Mdir "${build_root}/tb_pkt_formatter" \
@@ -237,6 +266,8 @@ run_tests() {
         rtl/field_aligner_assertions.sv \
         rtl/sym_id_mapper.sv \
         rtl/sym_id_mapper_assertions.sv \
+        rtl/strategy_core.sv \
+        rtl/strategy_core_assertions.sv \
         rtl/risk_gate.sv \
         rtl/risk_gate_assertions.sv \
         rtl/pkt_formatter.sv \

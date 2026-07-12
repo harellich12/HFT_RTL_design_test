@@ -8,8 +8,12 @@ in the critical path.
 The implemented pipeline is:
 
 ```text
-PCS RX -> mac_shim -> hdr_stripper -> field_aligner -> sym_id_mapper -> risk_gate -> pkt_formatter -> PCS TX
+PCS RX -> mac_shim -> hdr_stripper -> field_aligner -> sym_id_mapper -> strategy_core -> risk_gate -> pkt_formatter -> PCS TX
 ```
+
+`strategy_core` is the approved Stage-1 decision block (see
+`STRATEGY_CORE_PROPOSAL.md` and the decision record in `BLOCK_CONTEXT.md`):
+risk validates the strategy's order intent, not raw market fields.
 
 ## Repository Layout
 
@@ -32,6 +36,7 @@ PCS RX -> mac_shim -> hdr_stripper -> field_aligner -> sym_id_mapper -> risk_gat
 | `hdr_stripper` | Strips fixed Ethernet/IPv4/UDP headers and aligns UDP payload words. |
 | `field_aligner` | Extracts typed fields from static payload offsets in the first 24 payload bytes. |
 | `sym_id_mapper` | Maps instrument IDs to symbol indexes through an off-path loaded direct-mapped tag table; a post-reset init sweep invalidates every entry and lookups miss until `cfg_ready`. |
+| `strategy_core` | Stage-1 take-liquidity decision: one configured tradeable `msg_type`, per-symbol enable/side-policy/quantity table with init sweep. Every market update resolves to exactly one of order/suppress/error in one cycle. Verified cycle-by-cycle against a C++ reference model via DPI. |
 | `risk_gate` | Applies off-path loaded price/quantity limits, global kill, symbol miss, and upstream error checks in parallel; a post-reset init sweep writes fail-safe limits so unconfigured symbols always kill. |
 | `pkt_formatter` | Emits a complete raw-PCS order frame: preamble/SFD, fixed Ethernet/IPv4/UDP template with dynamic order fields, IEEE FCS, and terminate control word. Never truncates an in-flight frame; `tx_abort` invalidates one by FCS stomp. |
 | `hft_engine` | Integrates the full raw PCS RX/TX pipeline in spec order. A late inbound FCS failure suppresses the pending order launch or stomps the outbound FCS of the order already on the wire; global kill also stomps in-flight frames. Exposes kill reason, risk error, and drop/stomp counters. |
@@ -99,14 +104,16 @@ The nominal integrated smoke path in `tb/tb_hft_engine.sv` records:
 | `mac_sof` to `payload_sof` | 7 | 44.8 ns |
 | `payload_sof` to `field_valid` | 3 | 19.2 ns |
 | `field_valid` to `sym_valid` | 1 | 6.4 ns |
-| `sym_valid` to risk decision | 1 | 6.4 ns |
+| `sym_valid` to risk decision (through `strategy_core`) | 2 | 12.8 ns |
 | Risk decision to `tx_sof` | 1 | 6.4 ns |
-| `mac_sof` to `tx_sof` | 13 | 83.2 ns |
+| `mac_sof` to `tx_sof` | 14 | 89.6 ns |
 | `tx_sof` to `tx_eof` | 9 | 57.6 ns |
 
 The outbound burst is 10 words: preamble/SFD, five header words, two order
 field words, the FCS word, and a terminate control word. The added framing
 words land after the launch decision, so the decision path is unchanged.
+The one-cycle `strategy_core` stage (approved architecture change) accounts
+for the move from 13 to 14 cycles `mac_sof` to `tx_sof`.
 
 The downstream decision path from `field_valid` to `tx_sof` is three cycles.
 The larger front-end number is dominated by causal byte arrival for the fixed

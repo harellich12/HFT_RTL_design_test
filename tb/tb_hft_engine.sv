@@ -22,6 +22,13 @@ module tb_hft_engine;
     logic [PRICE_WIDTH-1:0]        risk_cfg_price_ceil;
     logic [QTY_WIDTH-1:0]          risk_cfg_qty_max;
     logic                          risk_cfg_valid;
+    logic [15:0]                   strat_cfg_msg_type;
+    logic                          strat_cfg_msg_type_valid;
+    logic [SYMBOL_ID_WIDTH-1:0]    strat_cfg_symbol_idx;
+    logic                          strat_cfg_entry_enable;
+    logic [1:0]                    strat_cfg_side_policy;
+    logic [QTY_WIDTH-1:0]          strat_cfg_qty;
+    logic                          strat_cfg_valid;
     logic                          cfg_ready;
     logic                          risk_global_kill;
     logic [3:0]                    risk_kill_reason;
@@ -82,6 +89,13 @@ module tb_hft_engine;
         .risk_cfg_price_ceil(risk_cfg_price_ceil),
         .risk_cfg_qty_max(risk_cfg_qty_max),
         .risk_cfg_valid(risk_cfg_valid),
+        .strat_cfg_msg_type(strat_cfg_msg_type),
+        .strat_cfg_msg_type_valid(strat_cfg_msg_type_valid),
+        .strat_cfg_symbol_idx(strat_cfg_symbol_idx),
+        .strat_cfg_entry_enable(strat_cfg_entry_enable),
+        .strat_cfg_side_policy(strat_cfg_side_policy),
+        .strat_cfg_qty(strat_cfg_qty),
+        .strat_cfg_valid(strat_cfg_valid),
         .cfg_ready(cfg_ready),
         .risk_global_kill(risk_global_kill),
         .risk_kill_reason(risk_kill_reason),
@@ -271,6 +285,13 @@ module tb_hft_engine;
         risk_cfg_price_ceil = '0;
         risk_cfg_qty_max = '0;
         risk_cfg_valid = 1'b0;
+        strat_cfg_msg_type = 16'h0;
+        strat_cfg_msg_type_valid = 1'b0;
+        strat_cfg_symbol_idx = '0;
+        strat_cfg_entry_enable = 1'b0;
+        strat_cfg_side_policy = 2'b00;
+        strat_cfg_qty = 32'h0;
+        strat_cfg_valid = 1'b0;
         risk_global_kill = 1'b0;
 
         repeat (3) @(posedge clk_pcs);
@@ -289,12 +310,23 @@ module tb_hft_engine;
         risk_cfg_price_ceil    = 64'd1_000_000;
         risk_cfg_qty_max       = 32'd1_000;
         risk_cfg_valid         = 1'b1;
+        // Strategy: trade msg_type 0x1234 on symbol 0x155, opposite side,
+        // fixed 64-lot order quantity (checked against risk_cfg_qty_max).
+        strat_cfg_msg_type       = 16'h1234;
+        strat_cfg_msg_type_valid = 1'b1;
+        strat_cfg_symbol_idx     = 10'h155;
+        strat_cfg_entry_enable   = 1'b1;
+        strat_cfg_side_policy    = 2'b01;
+        strat_cfg_qty            = 32'd64;
+        strat_cfg_valid          = 1'b1;
 
         @(posedge clk_pcs);
         #0.1;
         @(negedge clk_pcs);
         sym_cfg_valid = 1'b0;
         risk_cfg_valid = 1'b0;
+        strat_cfg_msg_type_valid = 1'b0;
+        strat_cfg_valid = 1'b0;
 
         @(negedge clk_pcs);
         pcs_block_lock = 1'b1;

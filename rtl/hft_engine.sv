@@ -1,13 +1,16 @@
 // Module     : hft_engine
 // Description: Top-level cut-through HFT engine pipeline integration
-// Latency    : 7 cycles best case
+// Latency    : 8 cycles best case (spec 7 plus the approved strategy stage)
 // Clock      : clk_pcs @ 156.25 MHz
 // Reset      : rst_n, active-low synchronous
 //
 // Pipeline role:
-// - Instantiates the spec-defined datapath modules in the required order.
+// - Instantiates the spec-defined datapath modules in the required order,
+//   plus the approved strategy_core stage between mapper and risk so the
+//   risk gate validates order intent rather than raw market fields.
 // - Keeps all datapath signals in the single PCS clock domain.
-// - Aligns extracted sideband fields with registered symbol and risk decisions.
+// - Aligns extracted sideband fields with registered symbol, strategy, and
+//   risk decisions.
 module hft_engine #(
     parameter int SYMBOL_TABLE_DEPTH = 1024,  // Legal range: power of 2; changes mapper/risk table depth.
     parameter int SYMBOL_ID_WIDTH    = 10,    // Legal range: log2(SYMBOL_TABLE_DEPTH); changes symbol index width.
@@ -36,6 +39,13 @@ module hft_engine #(
     input  logic [PRICE_WIDTH-1:0]        risk_cfg_price_ceil,
     input  logic [QTY_WIDTH-1:0]          risk_cfg_qty_max,
     input  logic                          risk_cfg_valid,
+    input  logic [15:0]                   strat_cfg_msg_type,
+    input  logic                          strat_cfg_msg_type_valid,
+    input  logic [SYMBOL_ID_WIDTH-1:0]    strat_cfg_symbol_idx,
+    input  logic                          strat_cfg_entry_enable,
+    input  logic [1:0]                    strat_cfg_side_policy,
+    input  logic [QTY_WIDTH-1:0]          strat_cfg_qty,
+    input  logic                          strat_cfg_valid,
     input  logic                          risk_global_kill,
     // High once both post-reset table init sweeps finish; load config after this.
     output logic                          cfg_ready,
@@ -72,12 +82,14 @@ module hft_engine #(
     logic        risk_cfg_ready;
 
     logic [63:0] instrument_id;
+    logic [15:0]            field_msg_type;
     logic [PRICE_WIDTH-1:0] field_price;
     logic [QTY_WIDTH-1:0]   field_quantity;
     logic [7:0]             field_side;
     logic                   field_valid;
     logic                   field_err;
 
+    logic [15:0]            sym_stage_msg_type_r;
     logic [PRICE_WIDTH-1:0] sym_stage_price_r;
     logic [QTY_WIDTH-1:0]   sym_stage_quantity_r;
     logic [7:0]             sym_stage_side_r;
@@ -86,6 +98,17 @@ module hft_engine #(
     logic                       sym_valid;
     logic                       sym_miss;
     logic                       sym_err;
+
+    logic [SYMBOL_ID_WIDTH-1:0] order_symbol_idx;
+    logic [PRICE_WIDTH-1:0]     order_price;
+    logic [QTY_WIDTH-1:0]       order_quantity;
+    logic [7:0]                 order_side;
+    logic                       order_valid;
+    logic                       order_err;
+    logic                       order_suppress;
+    logic                       strat_stage_sym_miss_r;
+    logic                       strat_cfg_ready;
+    logic                       risk_in_valid;
 
     logic [PRICE_WIDTH-1:0] risk_stage_price_r;
     logic [QTY_WIDTH-1:0]   risk_stage_quantity_r;
@@ -107,11 +130,14 @@ module hft_engine #(
     logic                   fmt_risk_pass;
     logic                   tx_abort;
 
-    assign cfg_ready = sym_cfg_ready && risk_cfg_ready;
+    assign cfg_ready = sym_cfg_ready && risk_cfg_ready && strat_cfg_ready;
 
     always_comb begin
         rx_fcs_bad    = mac_rx_eof && !rx_mac_fcs_valid;
-        risk_decision = risk_pass || risk_kill;
+        // A frame's intent is resolved by a risk decision or by the strategy
+        // deciding not to trade; either consumes the late-FCS bookkeeping.
+        risk_decision = risk_pass || risk_kill || order_suppress;
+        risk_in_valid = order_valid || order_err;
 
         // Suppress combinationally so a bad EOF coinciding with the decision
         // cycle still blocks that launch instead of leaking to the next frame.
@@ -198,7 +224,7 @@ module hft_engine #(
         .payload_eof(payload_eof),
         .payload_eof_bytes(payload_eof_bytes),
         .frame_err(frame_err),
-        .msg_type(),
+        .msg_type(field_msg_type),
         .instrument_id(instrument_id),
         .price(field_price),
         .quantity(field_quantity),
@@ -209,25 +235,34 @@ module hft_engine #(
 
     always_ff @(posedge clk_pcs) begin
         if (!rst_n) begin
+            sym_stage_msg_type_r <= 16'h0;
             sym_stage_price_r    <= '0;
             sym_stage_quantity_r <= '0;
             sym_stage_side_r     <= 8'h0;
+            strat_stage_sym_miss_r <= 1'b0;
             risk_stage_price_r    <= '0;
             risk_stage_quantity_r <= '0;
             risk_stage_side_r     <= 8'h0;
             risk_stage_symbol_idx_r <= '0;
         end else begin
             if (field_valid) begin
+                sym_stage_msg_type_r <= field_msg_type;
                 sym_stage_price_r    <= field_price;
                 sym_stage_quantity_r <= field_quantity;
                 sym_stage_side_r     <= field_side;
             end
 
-            if (sym_valid) begin
-                risk_stage_price_r    <= sym_stage_price_r;
-                risk_stage_quantity_r <= sym_stage_quantity_r;
-                risk_stage_side_r     <= sym_stage_side_r;
-                risk_stage_symbol_idx_r <= symbol_idx;
+            // Align the mapper's miss flag with the strategy's registered
+            // order-intent cycle so risk_gate sees a matched pair.
+            strat_stage_sym_miss_r <= sym_miss;
+
+            // Formatter sidebands follow the strategy's order intent so the
+            // risk decision one cycle later pairs with the fields it judged.
+            if (order_valid || order_err) begin
+                risk_stage_price_r    <= order_price;
+                risk_stage_quantity_r <= order_quantity;
+                risk_stage_side_r     <= order_side;
+                risk_stage_symbol_idx_r <= order_symbol_idx;
             end
         end
     end
@@ -252,6 +287,38 @@ module hft_engine #(
         .sym_err(sym_err)
     );
 
+    strategy_core #(
+        .SYMBOL_TABLE_DEPTH(SYMBOL_TABLE_DEPTH),
+        .SYMBOL_ID_WIDTH(SYMBOL_ID_WIDTH),
+        .PRICE_WIDTH(PRICE_WIDTH),
+        .QTY_WIDTH(QTY_WIDTH)
+    ) u_strategy_core (
+        .clk_pcs(clk_pcs),
+        .rst_n(rst_n),
+        .symbol_idx(symbol_idx),
+        .msg_type(sym_stage_msg_type_r),
+        .market_price(sym_stage_price_r),
+        .market_quantity(sym_stage_quantity_r),
+        .market_side(sym_stage_side_r),
+        .market_valid(sym_valid),
+        .market_err(sym_err),
+        .strat_cfg_msg_type(strat_cfg_msg_type),
+        .strat_cfg_msg_type_valid(strat_cfg_msg_type_valid),
+        .strat_cfg_symbol_idx(strat_cfg_symbol_idx),
+        .strat_cfg_entry_enable(strat_cfg_entry_enable),
+        .strat_cfg_side_policy(strat_cfg_side_policy),
+        .strat_cfg_qty(strat_cfg_qty),
+        .strat_cfg_valid(strat_cfg_valid),
+        .cfg_ready(strat_cfg_ready),
+        .order_symbol_idx(order_symbol_idx),
+        .order_price(order_price),
+        .order_quantity(order_quantity),
+        .order_side(order_side),
+        .order_valid(order_valid),
+        .order_err(order_err),
+        .order_suppress(order_suppress)
+    );
+
     risk_gate #(
         .SYMBOL_TABLE_DEPTH(SYMBOL_TABLE_DEPTH),
         .SYMBOL_ID_WIDTH(SYMBOL_ID_WIDTH),
@@ -260,13 +327,13 @@ module hft_engine #(
     ) u_risk_gate (
         .clk_pcs(clk_pcs),
         .rst_n(rst_n),
-        .symbol_idx(symbol_idx),
-        .price(sym_stage_price_r),
-        .quantity(sym_stage_quantity_r),
-        .side(sym_stage_side_r),
-        .sym_valid(sym_valid),
-        .sym_miss(sym_miss),
-        .sym_err(sym_err),
+        .symbol_idx(order_symbol_idx),
+        .price(order_price),
+        .quantity(order_quantity),
+        .side(order_side),
+        .sym_valid(risk_in_valid),
+        .sym_miss(strat_stage_sym_miss_r),
+        .sym_err(order_err),
         .risk_cfg_symbol_idx(risk_cfg_symbol_idx),
         .risk_cfg_price_floor(risk_cfg_price_floor),
         .risk_cfg_price_ceil(risk_cfg_price_ceil),
