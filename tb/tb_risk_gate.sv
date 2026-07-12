@@ -180,7 +180,8 @@ module tb_risk_gate;
         risk_global_kill = 1'b1;
         sym_valid = 1'b0;
 
-        @(posedge clk_pcs);
+        // Two waits: the kill pin crosses a two-stage synchronizer.
+        repeat (2) @(posedge clk_pcs);
         #0.1;
         drive_case(64'd100, 32'd100, 1'b0, 1'b0);
         expect_risk(1'b0, 1'b1, 4'h4, 1'b0, "global kill");
@@ -189,7 +190,7 @@ module tb_risk_gate;
         risk_global_kill = 1'b0;
         sym_valid = 1'b0;
 
-        @(posedge clk_pcs);
+        repeat (2) @(posedge clk_pcs);
         #0.1;
 
         drive_case(64'd1_000_001, 32'd1_001, 1'b0, 1'b0);

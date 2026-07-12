@@ -143,6 +143,24 @@ lint_tests() {
         rtl/pkt_formatter.sv \
         rtl/pkt_formatter_assertions.sv
 
+    run_cmd "$verilator_bin" --lint-only --timing --assert --top-module tb_hft_engine_random -Irtl \
+        tb/tb_hft_engine_random.sv \
+        rtl/hft_engine.sv \
+        rtl/mac_shim.sv \
+        rtl/mac_shim_assertions.sv \
+        rtl/hdr_stripper.sv \
+        rtl/hdr_stripper_assertions.sv \
+        rtl/field_aligner.sv \
+        rtl/field_aligner_assertions.sv \
+        rtl/sym_id_mapper.sv \
+        rtl/sym_id_mapper_assertions.sv \
+        rtl/strategy_core.sv \
+        rtl/strategy_core_assertions.sv \
+        rtl/risk_gate.sv \
+        rtl/risk_gate_assertions.sv \
+        rtl/pkt_formatter.sv \
+        rtl/pkt_formatter_assertions.sv
+
     run_cmd "$verilator_bin" --lint-only --timing --assert --top-module tb_hft_engine -Irtl \
         tb/tb_hft_engine.sv \
         rtl/hft_engine.sv \
@@ -274,6 +292,32 @@ run_tests() {
         rtl/pkt_formatter_assertions.sv
 
     run_cmd "${build_root}/tb_hft_engine/Vtb_hft_engine"
+
+    mkdir -p "${build_root}/tb_hft_engine_random"
+
+    run_cmd cp verif/strategy_ref_model.cpp "${build_root}/tb_hft_engine_random/"
+
+    run_cmd "$verilator_bin" --binary --timing --assert --trace --Mdir "${build_root}/tb_hft_engine_random" \
+        --top-module tb_hft_engine_random -Irtl -j "$jobs" \
+        tb/tb_hft_engine_random.sv \
+        rtl/hft_engine.sv \
+        rtl/mac_shim.sv \
+        rtl/mac_shim_assertions.sv \
+        rtl/hdr_stripper.sv \
+        rtl/hdr_stripper_assertions.sv \
+        rtl/field_aligner.sv \
+        rtl/field_aligner_assertions.sv \
+        rtl/sym_id_mapper.sv \
+        rtl/sym_id_mapper_assertions.sv \
+        rtl/strategy_core.sv \
+        rtl/strategy_core_assertions.sv \
+        rtl/risk_gate.sv \
+        rtl/risk_gate_assertions.sv \
+        rtl/pkt_formatter.sv \
+        rtl/pkt_formatter_assertions.sv \
+        "${build_root}/tb_hft_engine_random/strategy_ref_model.cpp"
+
+    run_cmd "${build_root}/tb_hft_engine_random/Vtb_hft_engine_random"
 }
 
 view_waves() {

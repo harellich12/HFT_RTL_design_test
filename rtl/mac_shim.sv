@@ -179,6 +179,11 @@ module mac_shim (
     // Decode the current PCS word and build the next CRC/FCS state. All results
     // are captured by the single output register stage above.
     always_comb begin
+        // SPEC_GAP: SOF detection requires the preamble/SFD to fill one aligned
+        // 64-bit word (frame start in lane 0). 10GBASE-R also permits frame
+        // starts on lane 4, which split the preamble across two words; such
+        // frames are not recognized. Lane-4 start support is an open item
+        // before live-wire bring-up.
         sof_detect = pcs_rx_valid
                   && pcs_block_lock
                   && !frame_active_r

@@ -121,6 +121,7 @@ module hft_engine #(
     // pending launch (frame's risk decision not yet made: short frames) or
     // aborts the frame already on the wire via FCS stomp (decision already
     // made: long frames). Global kill stomps any frame in flight.
+    logic                   global_kill_meta_r;
     logic                   global_kill_r;
     logic                   decision_done_r;
     logic                   launch_suppress_r;
@@ -154,11 +155,15 @@ module hft_engine #(
 
     always_ff @(posedge clk_pcs) begin
         if (!rst_n) begin
+            global_kill_meta_r <= 1'b0;
             global_kill_r     <= 1'b0;
             decision_done_r   <= 1'b0;
             launch_suppress_r <= 1'b0;
         end else begin
-            global_kill_r <= risk_global_kill;
+            // Two-stage synchronizer: risk_global_kill is asynchronous to
+            // clk_pcs and feeds the FCS-stomp abort path.
+            global_kill_meta_r <= risk_global_kill;
+            global_kill_r      <= global_kill_meta_r;
 
             // Decisions are strictly in-order, one per parsed frame, so the
             // flag cleanly tracks whether the current inbound frame's risk

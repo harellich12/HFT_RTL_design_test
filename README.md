@@ -127,6 +127,9 @@ specification or frozen interfaces are incomplete or contradictory:
 - `mac_shim`: the spec encodes the EOF bytecount as `[0=8, 1..7=N]`, but at the
   raw PCS boundary the terminate control character occupies a byte lane, so the
   EOF word carries 0..7 data bytes and `rx_eof_bytes` is the exact count.
+- `mac_shim`: SOF detection only recognizes preambles that fill one aligned
+  64-bit word (frame start in lane 0); 10GBASE-R lane-4 starts split the
+  preamble across two words and are not yet supported.
 - `hdr_stripper`: bad-length behavior is not numerically defined.
 - `hdr_stripper`: the written two-cycle `rx_sof` to `payload_valid` budget
   conflicts with stripping an in-stream preamble plus 42 header bytes.

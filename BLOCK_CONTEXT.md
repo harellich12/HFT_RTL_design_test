@@ -25,6 +25,7 @@ approval.
 | `field_aligner` | `rtl/field_aligner.sv` | Implemented with static offset parameters over the first 24 UDP payload bytes. Default layout remains unchanged; non-default static offsets are covered by the smoke test. | Verilator lint-only passes. `tb/tb_field_aligner.sv` lint-only passes. `rtl/field_aligner_assertions.sv` lint-only passes with assertions enabled. Existing VCD: `tb/field_aligner_smoke.vcd`. |
 | `sym_id_mapper` | `rtl/sym_id_mapper.sv` | Implemented with a direct-mapped tag table loaded by off-path config pins. The lower instrument bits select the symbol index; disabled entries or tag mismatches assert `sym_miss`. A `SPEC_GAP` remains because the exact serial reset-load protocol is undefined. | Verilator lint-only passes. `tb/tb_sym_id_mapper.sv` lint-only passes. `rtl/sym_id_mapper_assertions.sv` lint-only passes with assertions enabled. Existing VCD: `tb/sym_id_mapper_smoke.vcd`. |
 | `risk_gate` | `rtl/risk_gate.sv` | Implemented with off-path loaded floor/ceiling/quantity tables and a synchronously captured `risk_global_kill` input. Single-cause kill reasons use the spec codes; simultaneous violations encode as reserved `4'hE` to avoid reason aliasing. A `SPEC_GAP` remains because the exact serial reset-load protocol is undefined. | Verilator lint-only passes. `tb/tb_risk_gate.sv` lint-only passes. `rtl/risk_gate_assertions.sv` lint-only passes with assertions enabled. Existing VCD: `tb/risk_gate_smoke.vcd`. |
+| `strategy_core` | `rtl/strategy_core.sv` | Implemented per the Stage-1 answer sheet: take-liquidity only, configured tradeable msg_type, per-symbol enable/side-policy/qty table with init sweep + `cfg_ready`. Every market update resolves to exactly one of order/suppress/err in one cycle. | Verilator lint-only passes. `rtl/strategy_core_assertions.sv` mirrors config and asserts the contract. `tb/tb_strategy_core.sv` compares every decision against `verif/strategy_ref_model.cpp` via DPI (directed + seeded random, 315 cycles). |
 | `pkt_formatter` | `rtl/pkt_formatter.sv` | Implemented with a fixed Ethernet/IPv4/UDP template, 16-byte order payload, two Ethernet pad bytes, incremental FCS generation, one-cycle launch from `risk_pass`, and synchronous suppression on `risk_kill`. Has a `SPEC_GAP` note because the spec does not define addressing or payload schema. | Verilator lint-only passes. `tb/tb_pkt_formatter.sv` lint-only passes. `rtl/pkt_formatter_assertions.sv` lint-only passes with assertions enabled. Executable smoke flow is covered by `make test`. |
 | `hft_engine` | `rtl/hft_engine.sv` | Implemented as the top-level raw PCS RX/TX wrapper. Instantiates `mac_shim`, `hdr_stripper`, `field_aligner`, `sym_id_mapper`, `risk_gate`, and `pkt_formatter` in spec order. Includes sideband alignment registers for symbol/price/quantity/side across `sym_id_mapper` and `risk_gate` registered latencies. Exposes `rx_mac_fcs_valid` as telemetry without gating the cut-through trade path. Has a `SPEC_GAP` note because the spec lists derived MAC signals at the top-level boundary while also requiring `mac_shim` inside the top. | Verilator lint-only passes with all child RTL. `tb/tb_hft_engine.sv` lint-only passes and is wired into `make test`. |
 | Assertion bind files | `rtl/*_assertions.sv` | Complete for existing RTL modules: `mac_shim`, `hdr_stripper`, `field_aligner`, `sym_id_mapper`, `risk_gate`, and `pkt_formatter`. Recent hardening covers mid-frame block-lock loss, bounded payload completion, and exactly-one TX SOF per frame. | All assertion bind files lint-only pass standalone where applicable, with existing smoke tests where available, and through `hft_engine`. |
@@ -71,6 +72,9 @@ or interfaces are clarified:
 - `mac_shim`: the spec's `[0=8, 1..7=N]` EOF bytecount encoding cannot represent a
   terminate in lane 0 at the raw PCS boundary; `rx_eof_bytes` is the exact
   EOF-word data byte count (0..7) and `hdr_stripper` consumes the same encoding.
+- `mac_shim`: SOF detection only recognizes lane-0 (word-aligned) preambles;
+  10GBASE-R lane-4 frame starts are not yet supported. Open item before
+  live-wire bring-up.
 - `hdr_stripper`: numeric definition of bad length.
 - `hdr_stripper`: causal conflict between stripping preamble/header bytes and the written 2-cycle `rx_sof` to `payload_valid` budget.
 - `sym_id_mapper`: serial table load required by spec; current branch uses direct off-path load pins plus a post-reset init sweep (`cfg_ready` when done) while the serial protocol remains undefined.
@@ -221,14 +225,44 @@ Findings:
    cycle - directed cases plus a deterministic xorshift32 random stream
    (~315 checked cycles). The RTL and the model must change together.
 
+## Audit Hardening + Engine Scoreboard (2026-07-12)
+
+From the full-project audit:
+
+1. `risk_global_kill` now crosses a two-stage synchronizer in both
+   `risk_gate` (decision path) and `hft_engine` (stomp path); the assertion
+   mirror matches. Kill reaction from the pin is two cycles. The pin is
+   asynchronous; a single flop was a metastability liability on the most
+   safety-critical input.
+2. `mac_shim` lane-0-only preamble detection recorded as a `SPEC_GAP`
+   (10GBASE-R lane-4 frame starts are not recognized); open item before
+   live-wire bring-up.
+3. Stale docs fixed: `STRATEGY_CORE_PROPOSAL.md` carries an implemented
+   status banner; `PROJECT_SPEC_SHEET.md` gained the `strategy_core` module
+   section, the new top-level ports, and the 14-cycle measured latency.
+4. `tb_hft_engine_random`: randomized full-engine scoreboard. A deterministic
+   xorshift32 generator builds whole frames (header faults, truncation, tag
+   misses, unmapped symbols, non-tradeable msg_types, price/qty violations,
+   junk sides, corrupt FCS, short/long payloads, random gaps); a frame-level
+   predictor - using the same DPI golden model as tb_strategy_core for the
+   strategy decision - predicts every launch and the EXACT ten TX words
+   including FCS (inverted when a late bad inbound FCS stomps the order).
+   A directed epilogue pins the stomp, the fail-safe suppression eating the
+   next launch, and the suppression clearing after one decision. Also the
+   audit noted the 4'hF upstream-error kill path is unreachable end-to-end
+   (field_valid and field_err are mutually exclusive by construction), so
+   the scoreboard never predicts it; error frames die by valid-suppression.
+
 ## Next Recommended Work
 
 1. Resolve or formalize the formatter packet schema (addressing + payload).
 2. Strategy stage 2 per `STRATEGY_CORE_PROPOSAL.md` staging: per-symbol
    market state (best bid/offer, last trade) updated from inbound data.
 3. Serial config loader: deferred until FPGA host interface is chosen.
-4. Verification uplift (Phase 3 remainder): randomized frames + scoreboard at
-   the engine top, formal on risk_gate kill path, coverage.
+4. Verification uplift remainder: formal on the risk_gate kill path
+   (SymbiYosys), coverage collection, spec v2 decision (owner: project lead).
+5. FPGA milestone: Vivado STA on the two 1024-deep read-to-decide paths
+   (risk_gate and strategy_core), lane-4 preamble support.
 
 ## Session Checklist
 

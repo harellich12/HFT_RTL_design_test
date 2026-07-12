@@ -89,7 +89,12 @@ flowchart LR
   continuously, in every simulation that instantiates `strategy_core` —
   including the full-engine smoke test, where the DPI model is not present.
 - **Layer 3** proves the stage works in context: real Ethernet frames in,
-  order frames out, latency measured, suppression counted.
+  order frames out, latency measured, suppression counted. The randomized
+  engine scoreboard (`tb_hft_engine_random`) extends this layer: its
+  frame-level predictor calls the *same* DPI golden model for the strategy
+  decision and predicts every launch down to the exact ten TX words,
+  including stomped FCS values — so the decision spec has one source of
+  truth from unit level to full-engine random traffic.
 
 The comparison is honest because the testbench mirrors the *configuration it
 drove* (not the DUT's internal tables) into the model's arguments. The model
