@@ -37,6 +37,15 @@ module hft_engine #(
     input  logic [QTY_WIDTH-1:0]          risk_cfg_qty_max,
     input  logic                          risk_cfg_valid,
     input  logic                          risk_global_kill,
+    // High once both post-reset table init sweeps finish; load config after this.
+    output logic                          cfg_ready,
+
+    // Risk/TX telemetry: kill reason and error flag from risk_gate, plus
+    // formatter counts of dropped launches and FCS-stomped frames.
+    output logic [3:0]  risk_kill_reason,
+    output logic        risk_err,
+    output logic [15:0] tx_launch_drops,
+    output logic [15:0] tx_stomps,
 
     // Raw PCS TX
     output logic [63:0] pcs_txdata,
@@ -57,7 +66,10 @@ module hft_engine #(
     logic        payload_valid;
     logic        payload_sof;
     logic        payload_eof;
+    logic [2:0]  payload_eof_bytes;
     logic        frame_err;
+    logic        sym_cfg_ready;
+    logic        risk_cfg_ready;
 
     logic [63:0] instrument_id;
     logic [PRICE_WIDTH-1:0] field_price;
@@ -81,6 +93,67 @@ module hft_engine #(
     logic [SYMBOL_ID_WIDTH-1:0] risk_stage_symbol_idx_r;
     logic                   risk_pass;
     logic                   risk_kill;
+
+    // Late-FCS/global-kill handling. A bad inbound FCS either suppresses the
+    // pending launch (frame's risk decision not yet made: short frames) or
+    // aborts the frame already on the wire via FCS stomp (decision already
+    // made: long frames). Global kill stomps any frame in flight.
+    logic                   global_kill_r;
+    logic                   decision_done_r;
+    logic                   launch_suppress_r;
+    logic                   rx_fcs_bad;
+    logic                   risk_decision;
+    logic                   launch_suppress_now;
+    logic                   fmt_risk_pass;
+    logic                   tx_abort;
+
+    assign cfg_ready = sym_cfg_ready && risk_cfg_ready;
+
+    always_comb begin
+        rx_fcs_bad    = mac_rx_eof && !rx_mac_fcs_valid;
+        risk_decision = risk_pass || risk_kill;
+
+        // Suppress combinationally so a bad EOF coinciding with the decision
+        // cycle still blocks that launch instead of leaking to the next frame.
+        launch_suppress_now = launch_suppress_r
+                           || (rx_fcs_bad && !decision_done_r);
+        fmt_risk_pass = risk_pass && !launch_suppress_now;
+
+        // Abort targets the frame in flight only when the bad frame's own
+        // decision already happened; otherwise the suppression path owns it.
+        // Known conservative corner: if that launch was dropped while another
+        // frame was transmitting, the stomp hits the older frame (fail-safe).
+        tx_abort = global_kill_r || (rx_fcs_bad && decision_done_r);
+    end
+
+    always_ff @(posedge clk_pcs) begin
+        if (!rst_n) begin
+            global_kill_r     <= 1'b0;
+            decision_done_r   <= 1'b0;
+            launch_suppress_r <= 1'b0;
+        end else begin
+            global_kill_r <= risk_global_kill;
+
+            // Decisions are strictly in-order, one per parsed frame, so the
+            // flag cleanly tracks whether the current inbound frame's risk
+            // decision has already been produced.
+            if (mac_rx_sof) begin
+                decision_done_r <= 1'b0;
+            end else if (risk_decision) begin
+                decision_done_r <= 1'b1;
+            end
+
+            // Clear-on-decision wins: the masked decision consumed the
+            // suppression this cycle. A frame that dies before any decision
+            // leaves the suppression armed for the next decision, which is
+            // the fail-safe direction (drop a good order, never send a bad one).
+            if (risk_decision) begin
+                launch_suppress_r <= 1'b0;
+            end else if (rx_fcs_bad && !decision_done_r) begin
+                launch_suppress_r <= 1'b1;
+            end
+        end
+    end
 
     // SPEC_GAP: Section 2.1 lists derived MAC signals at the top-level boundary,
     // but Section 3 requires mac_shim inside hft_engine. This wrapper exposes only
@@ -112,7 +185,7 @@ module hft_engine #(
         .payload_valid(payload_valid),
         .payload_sof(payload_sof),
         .payload_eof(payload_eof),
-        .payload_eof_bytes(),
+        .payload_eof_bytes(payload_eof_bytes),
         .frame_err(frame_err)
     );
 
@@ -123,6 +196,7 @@ module hft_engine #(
         .payload_valid(payload_valid),
         .payload_sof(payload_sof),
         .payload_eof(payload_eof),
+        .payload_eof_bytes(payload_eof_bytes),
         .frame_err(frame_err),
         .msg_type(),
         .instrument_id(instrument_id),
@@ -171,6 +245,7 @@ module hft_engine #(
         .sym_cfg_instrument_tag(sym_cfg_instrument_tag),
         .sym_cfg_entry_valid(sym_cfg_entry_valid),
         .sym_cfg_valid(sym_cfg_valid),
+        .cfg_ready(sym_cfg_ready),
         .symbol_idx(symbol_idx),
         .sym_valid(sym_valid),
         .sym_miss(sym_miss),
@@ -197,11 +272,12 @@ module hft_engine #(
         .risk_cfg_price_ceil(risk_cfg_price_ceil),
         .risk_cfg_qty_max(risk_cfg_qty_max),
         .risk_cfg_valid(risk_cfg_valid),
+        .cfg_ready(risk_cfg_ready),
         .risk_global_kill(risk_global_kill),
         .risk_pass(risk_pass),
         .risk_kill(risk_kill),
-        .kill_reason(),
-        .risk_err()
+        .kill_reason(risk_kill_reason),
+        .risk_err(risk_err)
     );
 
     pkt_formatter #(
@@ -215,8 +291,11 @@ module hft_engine #(
         .price(risk_stage_price_r),
         .quantity(risk_stage_quantity_r),
         .side(risk_stage_side_r),
-        .risk_pass(risk_pass),
+        .risk_pass(fmt_risk_pass),
         .risk_kill(risk_kill),
+        .tx_abort(tx_abort),
+        .tx_launch_drops(tx_launch_drops),
+        .tx_stomps(tx_stomps),
         .pcs_txdata(pcs_txdata),
         .pcs_txctl(pcs_txctl),
         .pcs_tx_valid(pcs_tx_valid),

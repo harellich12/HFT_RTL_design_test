@@ -1,0 +1,4 @@
+# The Verilator flow runs under WSL/Linux; CRLF endings break bash and make
+# when the repo is cloned on Windows with core.autocrlf=true.
+*.sh     text eol=lf
+Makefile text eol=lf

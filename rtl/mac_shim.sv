@@ -23,6 +23,10 @@ module mac_shim (
     output logic        rx_valid,
     output logic        rx_sof,
     output logic        rx_eof,
+    // SPEC_GAP: The spec encodes eof bytecount as [0=8, 1..7=N], but at this raw
+    // PCS boundary the terminate control character occupies a byte lane of the
+    // EOF word, so the EOF word carries 0..7 data bytes and never 8. rx_eof_bytes
+    // is therefore the exact data byte count (0..7) equal to the terminate lane.
     output logic [2:0]  rx_eof_bytes,
     output logic        mac_fcs_valid
 );
@@ -68,6 +72,15 @@ module mac_shim (
             xor_bit   = crc_in_bit[31] ^ data_bit;
             crc32_bit = {crc_in_bit[30:0], 1'b0} ^ ({32{xor_bit}} & CRC_POLY);
         end
+    endfunction
+
+    // IEEE 802.3 transmits the FCS x^31 coefficient first while data byte lanes
+    // carry bit 0 first, so each FCS byte on the wire is a bit-reversed CRC byte.
+    function automatic logic [7:0] bitrev8 (
+        input logic [7:0] byte_in
+    );
+        bitrev8 = {byte_in[0], byte_in[1], byte_in[2], byte_in[3],
+                   byte_in[4], byte_in[5], byte_in[6], byte_in[7]};
     endfunction
 
     function automatic logic [31:0] crc32_byte (
@@ -209,9 +222,13 @@ module mac_shim (
         fcs_depth_next  = roll_b7[2:0];
 
         crc_final = crc_next ^ CRC_FINAL_XOR;
-        // FCS is transmitted least-significant byte first on the Ethernet wire.
-        expected_fcs_wire_order = {crc_final[7:0], crc_final[15:8],
-                                   crc_final[23:16], crc_final[31:24]};
+        // FCS wire order per IEEE 802.3: the CRC register is sent MSB byte first,
+        // each byte bit-reversed onto the LSB-first lane. The first received FCS
+        // byte sits at fcs_window[31:24], so pack first-to-last down from bit 31.
+        expected_fcs_wire_order = {bitrev8(crc_final[31:24]),
+                                   bitrev8(crc_final[23:16]),
+                                   bitrev8(crc_final[15:8]),
+                                   bitrev8(crc_final[7:0])};
 
         fcs_match = eof_detect
                  && (fcs_depth_next == FCS_BYTES[2:0])

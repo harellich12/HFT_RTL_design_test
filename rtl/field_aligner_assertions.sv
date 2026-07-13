@@ -17,6 +17,7 @@ module field_aligner_assertions #(
     input logic        payload_valid,
     input logic        payload_sof,
     input logic        payload_eof,
+    input logic [2:0]  payload_eof_bytes,
     input logic        frame_err,
 
     input logic [15:0] msg_type,
@@ -40,6 +41,7 @@ module field_aligner_assertions #(
     logic        payload_eof_d1_r;
     logic        payload_eof_d2_r;
     logic        payload_eof_d3_r;
+    logic [2:0]  payload_eof_bytes_d1_r;
     logic        frame_err_d1_r;
     logic        frame_err_d2_r;
     logic        frame_err_d3_r;
@@ -67,6 +69,7 @@ module field_aligner_assertions #(
             payload_eof_d1_r   <= 1'b0;
             payload_eof_d2_r   <= 1'b0;
             payload_eof_d3_r   <= 1'b0;
+            payload_eof_bytes_d1_r <= 3'h0;
             frame_err_d1_r     <= 1'b0;
             frame_err_d2_r     <= 1'b0;
             frame_err_d3_r     <= 1'b0;
@@ -83,6 +86,7 @@ module field_aligner_assertions #(
             payload_eof_d1_r   <= payload_eof;
             payload_eof_d2_r   <= payload_eof_d1_r;
             payload_eof_d3_r   <= payload_eof_d2_r;
+            payload_eof_bytes_d1_r <= payload_eof_bytes;
             frame_err_d1_r     <= frame_err;
             frame_err_d2_r     <= frame_err_d1_r;
             frame_err_d3_r     <= frame_err_d2_r;
@@ -96,6 +100,8 @@ module field_aligner_assertions #(
                        && (QUANTITY_OFFSET == 18)
                        && (SIDE_OFFSET == 22);
 
+        // Default fields end at payload byte 22, so a third word that is a
+        // partial EOF must still carry at least 7 valid bytes (encoding 0 = 8).
         three_word_nominal = default_offsets
                           && payload_valid_d3_r
                           && payload_valid_d2_r
@@ -103,6 +109,9 @@ module field_aligner_assertions #(
                           && payload_sof_d3_r
                           && !payload_eof_d3_r
                           && !payload_eof_d2_r
+                          && (!payload_eof_d1_r
+                              || (payload_eof_bytes_d1_r == 3'd0)
+                              || (payload_eof_bytes_d1_r >= 3'd7))
                           && !frame_err_d3_r
                           && !frame_err_d2_r
                           && !frame_err_d1_r;
@@ -170,6 +179,7 @@ bind field_aligner field_aligner_assertions #(
     .payload_valid(payload_valid),
     .payload_sof(payload_sof),
     .payload_eof(payload_eof),
+    .payload_eof_bytes(payload_eof_bytes),
     .frame_err(frame_err),
     .msg_type(msg_type),
     .instrument_id(instrument_id),

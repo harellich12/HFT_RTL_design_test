@@ -19,3 +19,7 @@ desktop.ini
 
 # Local WSL/session helper state
 .wsl/
+
+# Local Claude Code permission approvals are machine-specific.
+.claude/settings.json
+.claude/settings.local.json

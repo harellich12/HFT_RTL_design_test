@@ -1,0 +1,28 @@
+# Lint and smoke-test the RTL on every push and pull request.
+# ubuntu-24.04 packages Verilator 5.020, matching the local WSL toolchain.
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends verilator make g++
+
+      - name: Report tool versions
+        run: verilator --version
+
+      - name: Lint RTL, assertion binds, and testbenches
+        run: make lint
+
+      - name: Build and run smoke testbenches
+        run: make test

@@ -10,21 +10,27 @@ verilator_bin="${VERILATOR:-verilator}"
 # override with JOBS=N when the local toolchain is known to be stable.
 jobs="${JOBS:-1}"
 build_root="${BUILD_ROOT:-/tmp/hft_verilator_flow_${USER:-user}}"
+wave_viewer="${WAVE_VIEWER:-gtkwave}"
+# Default waveform module; override with MOD=<module> make waves.
+wave_module="${MOD:-hft_engine}"
 
 usage() {
     cat <<'USAGE'
-Usage: scripts/run_verilator_flow.sh [lint|test|all|clean]
+Usage: scripts/run_verilator_flow.sh [lint|test|all|waves|clean]
 
 Targets:
   lint   Lint RTL, smoke testbenches, and assertion binds.
   test   Build and run all available smoke testbenches with Verilator.
   all    Run lint, then build and run smoke tests.
+  waves  Open a smoke VCD in the wave viewer (MOD selects the module).
   clean  Remove Verilator build output.
 
 Environment:
   VERILATOR=/path/to/verilator   Override Verilator executable.
   JOBS=N                         Parallel make jobs used by Verilator builds; defaults to 1.
   BUILD_ROOT=/tmp/path            Verilator build dir; must not contain spaces.
+  MOD=<module>                   Module whose smoke VCD `waves` opens; defaults to hft_engine.
+  WAVE_VIEWER=<cmd>              Waveform viewer executable; defaults to gtkwave.
 USAGE
 }
 
@@ -239,6 +245,20 @@ run_tests() {
     run_cmd "${build_root}/tb_hft_engine/Vtb_hft_engine"
 }
 
+view_waves() {
+    local vcd="tb/${wave_module}_smoke.vcd"
+
+    if [ ! -f "$vcd" ]; then
+        echo "error: waveform not found: $vcd" >&2
+        echo "hint: run 'make test' first, or set MOD to one of:" >&2
+        ls tb/*_smoke.vcd 2>/dev/null | sed 's#tb/#  #; s#_smoke.vcd##' >&2 \
+            || echo "  (no smoke VCDs present yet)" >&2
+        exit 2
+    fi
+
+    run_cmd "$wave_viewer" "$vcd"
+}
+
 clean_flow() {
     run_cmd rm -rf obj_dir
     run_cmd rm -rf "$build_root"
@@ -268,6 +288,10 @@ main() {
             lint_rtl
             lint_tests
             run_tests
+            ;;
+        waves)
+            need_tool "$wave_viewer"
+            view_waves
             ;;
         clean)
             clean_flow

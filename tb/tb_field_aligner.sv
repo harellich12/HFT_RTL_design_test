@@ -7,6 +7,7 @@ module tb_field_aligner;
     logic        payload_valid;
     logic        payload_sof;
     logic        payload_eof;
+    logic [2:0]  payload_eof_bytes;
     logic        frame_err;
 
     logic [15:0] msg_type;
@@ -31,6 +32,7 @@ module tb_field_aligner;
         .payload_valid(payload_valid),
         .payload_sof(payload_sof),
         .payload_eof(payload_eof),
+        .payload_eof_bytes(payload_eof_bytes),
         .frame_err(frame_err),
         .msg_type(msg_type),
         .instrument_id(instrument_id),
@@ -54,6 +56,7 @@ module tb_field_aligner;
         .payload_valid(payload_valid),
         .payload_sof(payload_sof),
         .payload_eof(payload_eof),
+        .payload_eof_bytes(payload_eof_bytes),
         .frame_err(frame_err),
         .msg_type(alt_msg_type),
         .instrument_id(alt_instrument_id),
@@ -137,6 +140,7 @@ module tb_field_aligner;
         payload_valid = 1'b0;
         payload_sof   = 1'b0;
         payload_eof   = 1'b0;
+        payload_eof_bytes = 3'h0;
         frame_err     = 1'b0;
 
         repeat (3) @(posedge clk_pcs);
@@ -156,6 +160,7 @@ module tb_field_aligner;
 
         @(negedge clk_pcs);
         payload_eof  = 1'b1;
+        payload_eof_bytes = 3'h0;
         payload_data = pack8(8'h70, 8'h80, 8'h00, 8'h00,
                              8'h03, 8'hE8, 8'h42, 8'h00);
 
@@ -197,6 +202,114 @@ module tb_field_aligner;
         @(negedge clk_pcs);
         payload_valid = 1'b0;
         payload_eof   = 1'b0;
+        payload_eof_bytes = 3'h0;
+        payload_data  = 64'h0;
+
+        repeat (2) @(posedge clk_pcs);
+
+        // Truncated payload: EOF on the third word with only 6 valid bytes, so
+        // the last field byte (default side offset 22) never arrives. The
+        // aligner must refuse field_valid and flag field_err for both layouts.
+        @(negedge clk_pcs);
+        payload_valid = 1'b1;
+        payload_sof   = 1'b1;
+        payload_eof   = 1'b0;
+        payload_data  = pack8(8'h12, 8'h34, 8'h01, 8'h02,
+                              8'h03, 8'h04, 8'h05, 8'h06);
+
+        @(negedge clk_pcs);
+        payload_sof  = 1'b0;
+        payload_data = pack8(8'h07, 8'h08, 8'h10, 8'h20,
+                             8'h30, 8'h40, 8'h50, 8'h60);
+
+        @(negedge clk_pcs);
+        payload_eof       = 1'b1;
+        payload_eof_bytes = 3'd6;
+        payload_data      = pack8(8'h70, 8'h80, 8'h00, 8'h00,
+                                  8'h03, 8'hE8, 8'hDE, 8'hAD);
+
+        @(posedge clk_pcs);
+        #0.1;
+
+        if (field_valid || alt_field_valid) begin
+            $error("field_valid asserted on truncated payload: dut=%0b alt=%0b",
+                   field_valid, alt_field_valid);
+            $fatal;
+        end
+
+        if (!field_err || !alt_field_err) begin
+            $error("field_err not asserted on truncated payload: dut=%0b alt=%0b",
+                   field_err, alt_field_err);
+            $fatal;
+        end
+
+        @(negedge clk_pcs);
+        payload_valid = 1'b0;
+        payload_eof   = 1'b0;
+        payload_eof_bytes = 3'h0;
+        payload_data  = 64'h0;
+
+        repeat (2) @(posedge clk_pcs);
+
+        // Long payload: six words with EOF on the sixth. Fields capture on the
+        // third word; the saturated word count must not wrap and raise a
+        // spurious alignment error at EOF.
+        @(negedge clk_pcs);
+        payload_valid = 1'b1;
+        payload_sof   = 1'b1;
+        payload_eof   = 1'b0;
+        payload_data  = pack8(8'h12, 8'h34, 8'h01, 8'h02,
+                              8'h03, 8'h04, 8'h05, 8'h06);
+
+        @(negedge clk_pcs);
+        payload_sof  = 1'b0;
+        payload_data = pack8(8'h07, 8'h08, 8'h10, 8'h20,
+                             8'h30, 8'h40, 8'h50, 8'h60);
+
+        @(negedge clk_pcs);
+        payload_data = pack8(8'h70, 8'h80, 8'h00, 8'h00,
+                             8'h03, 8'hE8, 8'h42, 8'h00);
+
+        @(posedge clk_pcs);
+        #0.1;
+
+        if (!field_valid) begin
+            $error("field_valid did not assert on third word of long payload");
+            $fatal;
+        end
+
+        @(negedge clk_pcs);
+        payload_data = pack8(8'hA0, 8'hA1, 8'hA2, 8'hA3,
+                             8'hA4, 8'hA5, 8'hA6, 8'hA7);
+
+        @(negedge clk_pcs);
+        payload_data = pack8(8'hB0, 8'hB1, 8'hB2, 8'hB3,
+                             8'hB4, 8'hB5, 8'hB6, 8'hB7);
+
+        @(negedge clk_pcs);
+        payload_eof       = 1'b1;
+        payload_eof_bytes = 3'h0;
+        payload_data      = pack8(8'hC0, 8'hC1, 8'hC2, 8'hC3,
+                                  8'hC4, 8'hC5, 8'hC6, 8'hC7);
+
+        @(posedge clk_pcs);
+        #0.1;
+
+        if (field_valid || alt_field_valid) begin
+            $error("field_valid re-asserted after capture on long payload");
+            $fatal;
+        end
+
+        if (field_err || alt_field_err) begin
+            $error("spurious field_err at long-payload EOF: dut=%0b alt=%0b",
+                   field_err, alt_field_err);
+            $fatal;
+        end
+
+        @(negedge clk_pcs);
+        payload_valid = 1'b0;
+        payload_eof   = 1'b0;
+        payload_eof_bytes = 3'h0;
         payload_data  = 64'h0;
 
         repeat (2) @(posedge clk_pcs);

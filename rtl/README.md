@@ -59,13 +59,18 @@ flowchart TB
 | `field_aligner` | Extract typed fields from static UDP payload offsets and byte-swap once. | 1-3 payload words | Current fields reach byte 23, so default layout completes on payload word 3. |
 | `sym_id_mapper` | Map 64-bit instrument ID to compact symbol index. | 1 cycle | Direct-mapped tag table loaded through off-path config pins. |
 | `risk_gate` | Evaluate price, quantity, global kill, symbol miss, and upstream error checks in parallel. | 1 cycle | Risk limits are loaded through off-path config pins; decision outputs remain mutually exclusive. |
-| `pkt_formatter` | Format approved tuple into outbound Ethernet/IPv4/UDP order frame. | 1 cycle to SOF | Emits eight 64-bit TX words for the current minimum-size frame template. |
-| `hft_engine` | Integrate pipeline and align sideband fields between stages. | N/A | Raw PCS RX/TX boundary plus RX FCS telemetry. |
+| `pkt_formatter` | Format approved tuple into a complete raw-PCS order frame. | 1 cycle to SOF | Emits ten 64-bit TX words: preamble/SFD, headers, order fields, FCS, terminate control word. In-flight frames are never truncated; `tx_abort` stomps the FCS instead. |
+| `hft_engine` | Integrate pipeline, align sideband fields, own late-FCS/kill policy. | N/A | Raw PCS RX/TX boundary. Late bad inbound FCS suppresses the pending launch or stomps the in-flight order; exposes kill reason, risk error, and drop/stomp counters. |
 
-`rx_mac_fcs_valid` is intentionally telemetry only. It is asserted when
-`mac_shim` observes a good inbound FCS at EOF, but it does not gate
-`hdr_stripper`, `risk_gate`, or `pkt_formatter`. Gating on FCS would require
-waiting until EOF and would change the cut-through latency model.
+`rx_mac_fcs_valid` remains cut-through telemetry: it never delays a launch.
+A *failed* inbound FCS, however, is acted on after the fact. If the frame's
+risk decision has not happened yet (short frames: EOF precedes the decision),
+`hft_engine` suppresses that launch. If the decision already happened and the
+order is on the wire (long frames), `hft_engine` asserts `tx_abort` and
+`pkt_formatter` inverts the outbound FCS (stomp), so the receiving MAC drops
+the order as a CRC error. Global kill stomps any frame in flight the same way.
+An order whose final FCS word already left the device cannot be recalled; that
+residual window is the accepted cost of cut-through.
 
 ## Integration Microarchitecture
 
@@ -103,7 +108,7 @@ The latest integrated smoke measurement at 156.25 MHz is:
 | `sym_valid` to risk decision | 1 | 6.4 ns |
 | Risk decision to `tx_sof` | 1 | 6.4 ns |
 | `mac_sof` to `tx_sof` | 13 | 83.2 ns |
-| `tx_sof` to `tx_eof` | 7 | 44.8 ns |
+| `tx_sof` to `tx_eof` | 9 | 57.6 ns |
 
 The decision path after all fields are available is three cycles:
 
@@ -128,10 +133,13 @@ compile-time parameters available for alternate static offsets inside the first
 | `quantity` | 18-21 | 32 | byte-reversed from wire |
 | `side` | 22 | 8 | unchanged |
 
-Outbound formatting currently emits a fixed Ethernet/IPv4/UDP template with a
-compact 16-byte order payload plus two pad bytes and Ethernet FCS. Destination
-addressing, source addressing, and the production exchange order schema are still
-spec gaps.
+Outbound formatting emits a complete ten-word raw-PCS burst: a preamble/SFD
+data word, the fixed Ethernet/IPv4/UDP template with a compact 16-byte order
+payload plus two pad bytes, the IEEE FCS, and a terminate control word (/T/ in
+lane 0 of `pcs_txctl = 8'hFF`). The framing mirrors the mac_shim RX
+conventions, so the TX stream is a legal input for the RX side. Destination
+addressing, source addressing, and the production exchange order schema are
+still spec gaps.
 
 ## Risk Checks
 
@@ -152,6 +160,18 @@ live traffic; config writes are not part of the packet timing path.
 `sym_id_mapper` similarly reads a direct-mapped tag table indexed by the lower
 instrument bits. A disabled entry or tag mismatch asserts `sym_miss`.
 
+After reset, both `sym_id_mapper` and `risk_gate` run an init sweep that writes
+one table entry per cycle: symbol entries are invalidated and risk entries get
+fail-safe limits (floor = max, ceiling = 0, quantity = 0). Lookups during the
+sweep miss or kill deterministically (reserved reason `4'hE` in the risk gate),
+and each module raises `cfg_ready` when its sweep completes; `hft_engine` ANDs
+them into a single top-level `cfg_ready`. Config loads issued before `cfg_ready`
+are ignored.
+
+The outbound and inbound FCS use IEEE 802.3 wire order (CRC register MSB byte
+first, bit-reversed per byte) and are checked against independent known-answer
+vectors in `tb_mac_shim` and `tb_pkt_formatter`.
+
 ## Assertion Bind Coverage
 
 | Bind File | Coverage Theme |
@@ -161,7 +181,7 @@ instrument bits. A disabled entry or tag mismatch asserts `sym_miss`.
 | `field_aligner_assertions.sv` | Field valid/error relationship, default extraction correctness, propagated errors. |
 | `sym_id_mapper_assertions.sv` | One-cycle valid timing, config-backed index/tag behavior, tag miss, field error propagation. |
 | `risk_gate_assertions.sv` | Pass/kill exclusivity, config-backed one-cycle decisions, global kill, kill reason encoding. |
-| `pkt_formatter_assertions.sv` | One-cycle launch, exactly one SOF per TX frame, no TX gaps, kill suppression, EOF shape, raw TX control behavior. |
+| `pkt_formatter_assertions.sv` | One-cycle launch, exactly one SOF per TX frame, no TX gaps, kill-at-launch-only (in-flight frames never truncate), preamble on SOF, terminate control on EOF, fixed 10-word frame length. |
 
 ## Current `SPEC_GAP` Items in RTL
 
@@ -173,6 +193,7 @@ instrument bits. A disabled entry or tag mismatch asserts `sym_miss`.
 | `risk_gate` | Reset-time serial risk table load is required by spec; current branch uses direct off-path limit load pins plus global kill while the serial protocol remains undefined. |
 | `risk_gate` | Simultaneous violation priority is unspecified; implementation reports multi-cause kills as `4'hE`. |
 | `pkt_formatter` | Production addressing and order payload schema are unspecified. |
+| `pkt_formatter` | The spec's "risk_kill resets state within 1 cycle" conflicts with "no partial frames" once frames pipeline; kill applies at launch only and tx_abort/FCS stomp covers in-flight invalidation. |
 | `hft_engine` | Top-level raw PCS boundary conflicts with spec text listing derived MAC top-level signals; FCS status is exposed as telemetry while other derived MAC signals remain internal. |
 
 ## Local Lint Commands

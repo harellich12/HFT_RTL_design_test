@@ -70,6 +70,23 @@ module tb_mac_shim;
         end
     endfunction
 
+    function automatic logic [7:0] bitrev8 (
+        input logic [7:0] byte_in
+    );
+        bitrev8 = {byte_in[0], byte_in[1], byte_in[2], byte_in[3],
+                   byte_in[4], byte_in[5], byte_in[6], byte_in[7]};
+    endfunction
+
+    // Convert the CRC register to IEEE 802.3 wire order: MSB byte first,
+    // bit-reversed per byte. Result [7:0] is the first byte on the wire, which
+    // makes the packed value equal the standard software CRC-32 residue.
+    function automatic logic [31:0] fcs_wire_bytes (
+        input logic [31:0] crc_final
+    );
+        fcs_wire_bytes = {bitrev8(crc_final[7:0]), bitrev8(crc_final[15:8]),
+                          bitrev8(crc_final[23:16]), bitrev8(crc_final[31:24])};
+    endfunction
+
     function automatic logic [31:0] expected_fcs_10b (
         input logic [7:0] b0,
         input logic [7:0] b1,
@@ -155,9 +172,17 @@ module tb_mac_shim;
         logic [63:0] word1;
         logic [63:0] word2;
         begin
-            fcs = expected_fcs_10b(8'h01, 8'h23, 8'h45, 8'h67,
-                                   8'h89, 8'hAB, 8'hCD, 8'hEF,
-                                   8'h55, 8'hAA);
+            fcs = fcs_wire_bytes(expected_fcs_10b(8'h01, 8'h23, 8'h45, 8'h67,
+                                                  8'h89, 8'hAB, 8'hCD, 8'hEF,
+                                                  8'h55, 8'hAA));
+
+            // Known-answer check against an independent IEEE 802.3 reference
+            // (Python zlib.crc32 of 01 23 45 67 89 AB CD EF 55 AA).
+            if (fcs !== 32'h7146AAFA) begin
+                $error("FCS known-answer mismatch: computed=0x%08h expected=0x7146AAFA", fcs);
+                $fatal;
+            end
+
             fcs_to_send = corrupt_fcs ? (fcs ^ 32'h00000001) : fcs;
 
             word0 = PREAMBLE_SFD_WORD;

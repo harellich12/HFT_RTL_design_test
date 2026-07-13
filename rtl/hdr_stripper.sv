@@ -17,6 +17,8 @@ module hdr_stripper (
     input  logic        rx_valid,
     input  logic        rx_sof,
     input  logic        rx_eof,
+    // Exact data byte count of the EOF word (0..7); the terminate control
+    // character occupies a lane, so a full 8-byte EOF word cannot occur here.
     input  logic [2:0]  rx_eof_bytes,
 
     // To field_aligner
@@ -24,6 +26,8 @@ module hdr_stripper (
     output logic        payload_valid,
     output logic        payload_sof,
     output logic        payload_eof,
+    // Valid bytes in the final payload word, encoded [0=8, 1..7=N]; realigned
+    // payload words can be full even when the inbound EOF word is partial.
     output logic [2:0]  payload_eof_bytes,
     output logic        frame_err
 );
@@ -113,7 +117,9 @@ module hdr_stripper (
     always_comb begin
         current_word_cnt = rx_sof ? '0 : word_cnt_r + {{(WORD_CNT_WIDTH-1){1'b0}}, 1'b1};
 
-        rx_eof_valid_bytes = (rx_eof_bytes == 3'd0) ? 4'd8 : {1'b0, rx_eof_bytes};
+        // rx_eof_bytes is the exact EOF-word data byte count (0..7) from
+        // mac_shim: the terminate lane index. 0 means zero data bytes, not 8.
+        rx_eof_valid_bytes = {1'b0, rx_eof_bytes};
 
         ethertype_err = rx_valid
                       && (current_word_cnt == 16'd2)
@@ -142,12 +148,9 @@ module hdr_stripper (
                             && (current_word_cnt >= FIRST_PAYLOAD_WORD[WORD_CNT_WIDTH-1:0]);
         normal_payload_eof   = rx_eof && (rx_eof_valid_bytes <= HDR_REM_BYTES[3:0]);
 
-        if (rx_eof_valid_bytes == HDR_REM_BYTES[3:0]) begin
-            normal_payload_eof_bytes = 3'd0;
-        end else begin
-            // One final byte from the current input word completes a 7-byte final output.
-            normal_payload_eof_bytes = 3'd7;
-        end
+        // Final realigned word carries the 6-byte tail plus 0..2 bytes from the
+        // EOF word: counts 0/1/2 map to 6/7/8 valid bytes (8 encodes as 0).
+        normal_payload_eof_bytes = rx_eof_bytes + 3'd6;
 
         start_eof_flush = rx_valid
                         && rx_eof
