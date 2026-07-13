@@ -20,13 +20,16 @@ risk validates the strategy's order intent, not raw market fields.
 | Path | Purpose |
 | --- | --- |
 | `rtl/` | Synthesizable SystemVerilog RTL and SVA bind files. |
-| `tb/` | Smoke testbenches for the leaf blocks and integrated top level. |
-| `scripts/run_verilator_flow.sh` | Verilator lint/build/test flow. |
+| `tb/` | Testbenches: per-block smoke tests, the DPI golden-model comparison, the integrated smoke test, and the randomized full-engine scoreboard. |
+| `verif/` | Golden C++ reference models and the verification methodology guide (`verif/README.md`). |
+| `scripts/run_verilator_flow.sh` | Verilator lint/build/test/waves flow. |
 | `Makefile` | Convenience wrapper around the Verilator flow. |
-| `HFT_RTL_System_Spec_Prompt.md` | Original architecture and module specification. |
+| `.github/workflows/ci.yml` | CI: `make lint` + `make test` on every push and pull request. |
+| `HFT_RTL_System_Spec_Prompt.md` | Original architecture and module specification (frozen; see spec gaps). |
 | `PROJECT_SPEC_SHEET.md` | Derived status sheet mapping spec requirements to the current implementation. |
-| `BLOCK_CONTEXT.md` | Lightweight handoff/status notes for future RTL sessions. |
+| `BLOCK_CONTEXT.md` | Session handoff log, architecture decision record, and block status. |
 | `DESIGN_NOTES.md` | Architectural rationale for latency-oriented choices. |
+| `STRATEGY_CORE_PROPOSAL.md` | Strategy layer rationale and stages 2-4 roadmap (Stage 1 implemented). |
 
 ## RTL Blocks
 
@@ -83,15 +86,18 @@ spaces. Override with:
 BUILD_ROOT=/tmp/hft_build make test
 ```
 
-Current verified state:
+Current verified state (all enforced by CI on every push and pull request):
 
-- RTL lint-only passes for all seven RTL modules, including `hft_engine`.
-- Testbench lint-only passes for all smoke testbenches.
-- Assertion bind lint-only passes with `--assert`.
-- Executable smoke simulation is supported through `make test`. Smoke builds
-  default to `JOBS=1` to avoid a Verilator 5.048 thread-pool shutdown failure
-  observed with high parallelism; override with `JOBS=N make test` only on a
-  stable local toolchain.
+- Lint passes for all eight RTL modules, every assertion bind (`--assert`),
+  and all nine testbenches.
+- `make test` runs nine simulations: seven per-block smoke tests, the
+  strategy golden-model comparison (every decision checked against
+  `verif/strategy_ref_model.cpp` via DPI), and the randomized full-engine
+  scoreboard (whole frames generated with fault injection; every launched
+  order predicted and matched word-for-word, FCS included).
+- Smoke builds default to `JOBS=1` to avoid a Verilator thread-pool shutdown
+  failure observed with high parallelism; override with `JOBS=N make test`
+  only on a stable local toolchain.
 
   <img width="1591" height="904" alt="image" src="https://github.com/user-attachments/assets/4e868c0c-a771-4054-868f-ff9ae6ca9ea8" />
 

@@ -31,8 +31,8 @@ spec is, where it came from, why it matters, and how the current project address
 | Headless datapath: no CPU, OS, DMA, or firmware in the critical path. | Original architecture section. | Software intervention is orders of magnitude slower than the target pipeline. | RTL datapath is pure module-to-module logic. |
 | Cut-through forwarding: begin processing before the inbound frame tail arrives. | Original architecture section. | Avoids full-frame receive latency. | Modules process streamed 64-bit words; no full-frame buffer exists. |
 | No AXI/AHB/APB or bus wrapper on datapath signals. | Original interface and architecture sections; `agents.md`. | Handshake fabrics add arbitration and ready/valid timing paths. | Current datapath uses raw fixed signals only. |
-| Single pipeline order: `mac_shim -> hdr_stripper -> field_aligner -> sym_id_mapper -> risk_gate -> pkt_formatter`. | Original module decomposition section. | Ensures deterministic stage ordering and latency accounting. | Implemented by `rtl/hft_engine.sv`. |
-| No additional datapath hierarchy. | Original module decomposition section. | Prevents hidden buffering or pipeline stage insertion. | Top-level instantiates exactly the named datapath modules. |
+| Single pipeline order: `mac_shim -> hdr_stripper -> field_aligner -> sym_id_mapper -> strategy_core -> risk_gate -> pkt_formatter`. | Original module decomposition section plus the approved strategy insertion (Architecture Decisions, `BLOCK_CONTEXT.md`). | Ensures deterministic stage ordering and latency accounting; risk validates order intent. | Implemented by `rtl/hft_engine.sv`. |
+| No additional datapath hierarchy beyond the approved strategy stage. | Original module decomposition section; strategy insertion explicitly approved as an architectural change. | Prevents hidden buffering or unapproved pipeline stage insertion. | Top-level instantiates exactly the named datapath modules. |
 | One clock domain: `clk_pcs`, 156.25 MHz. | Original coding standards and module interfaces. | Avoids CDC latency, metastability controls, and timing uncertainty. | All RTL modules use `clk_pcs`. |
 | One active-low synchronous reset: `rst_n`. | Original coding standards. | Keeps reset behavior synthesizable and deterministic. | All implemented modules reset synchronously in `always_ff`. |
 
@@ -218,7 +218,8 @@ implements the recorded Stage-1 answer sheet.
 | `hdr_stripper` | `rx_sof` | `payload_valid` | 2 cycles | Marked `SPEC_GAP`; causal stream implementation emits after enough header bytes arrive. |
 | `field_aligner` | Payload words | `field_valid` | 1-2 cycles | Current fixed layout asserts on third payload word for cross-word fields. |
 | `sym_id_mapper` | `field_valid` | `sym_valid` | 1 cycle | Implemented and asserted. |
-| `risk_gate` | `sym_valid` | `risk_pass` or `risk_kill` | 1 cycle | Implemented and asserted. |
+| `strategy_core` | `sym_valid` | `order_valid`/`order_suppress`/`order_err` | 1 cycle (approved addition) | Implemented and asserted; exactly one outcome per market update. |
+| `risk_gate` | `order_valid` | `risk_pass` or `risk_kill` | 1 cycle | Implemented and asserted. |
 | `pkt_formatter` | `risk_pass` | `pcs_tx_sof` | 1 cycle | Implemented and asserted. |
 
 ## Measured End-to-End Latency
@@ -242,7 +243,10 @@ Interpretation: the downstream decision path from `field_valid` to `tx_sof` is 3
 | Requirement | Source | Why It Matters | Current Status |
 | --- | --- | --- | --- |
 | Per-module assertion bind files. | Original assertion section. | Keeps formal/simulation checks separate from synthesizable RTL. | Complete for all current RTL blocks. |
-| Smoke tests for implemented high-risk/current blocks. | Engineering verification need. | Fast regression catches obvious behavioral breaks. | Existing tests cover `mac_shim`, `hdr_stripper`, `field_aligner`, `sym_id_mapper`, `risk_gate`, `pkt_formatter`, and top-level `hft_engine`. |
+| Smoke tests for implemented high-risk/current blocks. | Engineering verification need. | Fast regression catches obvious behavioral breaks. | Existing tests cover `mac_shim`, `hdr_stripper`, `field_aligner`, `sym_id_mapper`, `strategy_core`, `risk_gate`, `pkt_formatter`, and top-level `hft_engine`. |
+| Golden-model verification of decision logic. | Verification methodology (`verif/README.md`). | RTL and specification must be independently encoded and compared. | `tb_strategy_core` checks every decision against `verif/strategy_ref_model.cpp` via DPI; an SVA mirror enforces the same contract in every simulation. |
+| Randomized full-engine scoreboard. | Verification methodology (`verif/README.md`). | Integration logic (sidebands, late-FCS bookkeeping, stomp) needs traffic no directed test anticipates. | `tb_hft_engine_random` generates fault-injected frames and predicts every launched order word-for-word, FCS included. |
+| Continuous integration. | Engineering verification need. | Every change must be verified before merge. | `.github/workflows/ci.yml` runs `make lint` + `make test` on every push and pull request. |
 | WSL/Linux repeatable flow. | User request and toolchain constraints. | Avoids manual command drift and Windows Make path issues. | `Makefile` and `scripts/run_verilator_flow.sh` exist. |
 | Build outside paths with spaces. | GNU Make/Verilator behavior observed during run. | Verilator generated Makefiles fail under repo path containing spaces. | Flow builds under `/tmp/hft_verilator_flow_$USER`. |
 | Serialized smoke builds by default. | Verilator 5.048 behavior observed during `tb_pkt_formatter` build. | High `-j` values can trip an internal Verilator thread-pool shutdown failure unrelated to RTL behavior. | `scripts/run_verilator_flow.sh` defaults `JOBS=1`; users can override with `JOBS=N`. |
@@ -295,10 +299,16 @@ gtkwave tb/hft_engine_smoke.vcd
 
 ## Remaining Recommended Work
 
-1. Review and approve or reject the proposed `strategy_core` insertion.
-   - Source: current pipeline parses and risk-checks fields but has no actual quant/alpha decision block.
-   - Why important: In production, risk should validate order intent produced by strategy logic, not raw market data fields.
+See `BLOCK_CONTEXT.md` (Next Recommended Work) for the maintained list. In
+summary:
 
-2. Decide whether direct off-path config pins should remain or be converted into a serial reset loader before merge.
-   - Source: `sym_id_mapper` and `risk_gate` original specs require reset-time configuration but do not define the loader protocol.
-   - Why important: The current branch is functional and latency-neutral, but the exact production programming surface is still an architectural decision.
+1. Formalize the formatter packet schema once a real exchange/order format
+   is chosen (addressing and payload remain placeholder `SPEC_GAP`s).
+2. Strategy stage 2: per-symbol market state, following the golden-model
+   pattern established in `verif/`.
+3. Config loader and telemetry/CSR interface: deferred by decision until the
+   FPGA host interface is chosen.
+4. Formal proof of the risk_gate kill path (SymbiYosys) and coverage
+   collection; spec v2 to absorb the recorded deviations (owner: project lead).
+5. FPGA milestone: Vivado STA on the two 1024-deep read-to-decide paths,
+   lane-4 preamble support.

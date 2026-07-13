@@ -18,10 +18,10 @@ flowchart LR
     FMT --> PCS_TX["PCS TX\n64-bit data + ctl"]
 ```
 
-The integrated top module is `hft_engine.sv`. It instantiates only the six
+The integrated top module is `hft_engine.sv`. It instantiates only the seven
 pipeline stages above and adds sideband alignment registers needed to keep
-symbol, price, quantity, and side matched across the registered mapper and risk
-stages.
+msg_type, symbol, price, quantity, and side matched across the registered
+mapper, strategy, and risk stages.
 
 ## Clocking and Reset
 
@@ -42,12 +42,13 @@ flowchart TB
     FCS["rx_mac_fcs_valid\ntelemetry"]
     MOUT["rx_data[63:0]\nrx_valid/rx_sof/rx_eof\nrx_eof_bytes\nmac_fcs_valid"]
     HOUT["payload_data[63:0]\npayload_valid/payload_sof/payload_eof\npayload_eof_bytes\nframe_err"]
-    FOUT["instrument_id[63:0]\nprice[63:0]\nquantity[31:0]\nside[7:0]\nfield_valid/field_err"]
+    FOUT["msg_type[15:0]\ninstrument_id[63:0]\nprice[63:0]\nquantity[31:0]\nside[7:0]\nfield_valid/field_err"]
     SOUT["symbol_idx\nsym_valid/sym_miss/sym_err"]
+    STROUT["order_symbol_idx/order_price\norder_quantity/order_side\norder_valid/order_suppress/order_err"]
     ROUT["risk_pass/risk_kill\nkill_reason/risk_err"]
     TX["pcs_txdata[63:0]\npcs_txctl[7:0]\npcs_tx_valid/sof/eof\npcs_tx_eof_bytes"]
 
-    RX --> MOUT --> HOUT --> FOUT --> SOUT --> ROUT --> TX
+    RX --> MOUT --> HOUT --> FOUT --> SOUT --> STROUT --> ROUT --> TX
     MOUT -.-> FCS
 ```
 
@@ -81,22 +82,26 @@ sequenceDiagram
     participant FA as field_aligner
     participant HFT as hft_engine sideband regs
     participant MAP as sym_id_mapper
+    participant STR as strategy_core
     participant RISK as risk_gate
     participant FMT as pkt_formatter
 
-    FA->>HFT: field_valid + price/quantity/side
+    FA->>HFT: field_valid + msg_type/price/quantity/side
     HFT->>MAP: instrument_id + field_valid
-    HFT->>RISK: sym-stage price/quantity/side
-    MAP->>RISK: symbol_idx + sym_valid/miss/err
+    MAP->>STR: symbol_idx + sym_valid/err
+    HFT->>STR: sym-stage msg_type/price/quantity/side
+    STR->>RISK: order intent (symbol/price/qty/side + valid/err)
+    HFT->>RISK: sym_miss delayed to the order-intent cycle
     RISK->>HFT: risk_pass/risk_kill
-    HFT->>FMT: risk-stage symbol/price/quantity/side
+    HFT->>FMT: risk-stage order symbol/price/quantity/side
     RISK->>FMT: risk decision
 ```
 
-`hft_engine` captures field sidebands when `field_valid` asserts. On the mapper
-valid cycle, it captures the mapped symbol and forwards the matching price,
-quantity, and side to the formatter stage. This prevents a pass/kill decision
-from being paired with stale or future order fields.
+`hft_engine` captures field sidebands when `field_valid` asserts, feeds them
+with the mapped symbol into `strategy_core` on the mapper valid cycle, and
+captures the strategy's order intent for the formatter stage. This keeps every
+pass/kill decision paired with exactly the order fields it judged, never stale
+or future values.
 
 ## Nominal Latency
 
