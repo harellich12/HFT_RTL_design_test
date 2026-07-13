@@ -44,6 +44,7 @@ module risk_gate #(
     logic [PRICE_WIDTH-1:0] price_floor_table [SYMBOL_TABLE_DEPTH];
     logic [PRICE_WIDTH-1:0] price_ceil_table [SYMBOL_TABLE_DEPTH];
     logic [QTY_WIDTH-1:0]   qty_max_table [SYMBOL_TABLE_DEPTH];
+    logic                   global_kill_meta_r;
     logic                   global_kill_r;
     logic [PRICE_WIDTH-1:0] price_floor_limit;
     logic [PRICE_WIDTH-1:0] price_ceil_limit;
@@ -67,11 +68,17 @@ module risk_gate #(
             risk_kill   <= 1'b0;
             kill_reason <= 4'h0;
             risk_err    <= 1'b0;
+            global_kill_meta_r <= 1'b0;
             global_kill_r <= 1'b0;
             init_active_r <= 1'b1;
             init_idx_r    <= '0;
         end else begin
-            global_kill_r <= risk_global_kill;
+            // risk_global_kill has no timing relationship to clk_pcs, so it
+            // crosses through a two-stage synchronizer: metastability on the
+            // most safety-critical input must not reach the decision logic.
+            // Kill reaction latency is therefore two cycles from the pin.
+            global_kill_meta_r <= risk_global_kill;
+            global_kill_r      <= global_kill_meta_r;
 
             // Post-reset init sweep: every entry is written to fail-safe limits
             // (floor = max, ceiling/quantity = 0) so an unconfigured symbol can

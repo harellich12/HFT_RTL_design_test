@@ -12,15 +12,16 @@ flowchart LR
     MAC --> HDR["hdr_stripper\nEther/IP/UDP strip"]
     HDR --> FIELD["field_aligner\nstatic field extraction"]
     FIELD --> MAP["sym_id_mapper\ninstrument -> symbol"]
-    MAP --> RISK["risk_gate\nparallel checks"]
+    MAP --> STRAT["strategy_core\norder intent"]
+    STRAT --> RISK["risk_gate\nparallel checks"]
     RISK --> FMT["pkt_formatter\noutbound frame + FCS"]
     FMT --> PCS_TX["PCS TX\n64-bit data + ctl"]
 ```
 
-The integrated top module is `hft_engine.sv`. It instantiates only the six
+The integrated top module is `hft_engine.sv`. It instantiates only the seven
 pipeline stages above and adds sideband alignment registers needed to keep
-symbol, price, quantity, and side matched across the registered mapper and risk
-stages.
+msg_type, symbol, price, quantity, and side matched across the registered
+mapper, strategy, and risk stages.
 
 ## Clocking and Reset
 
@@ -41,12 +42,13 @@ flowchart TB
     FCS["rx_mac_fcs_valid\ntelemetry"]
     MOUT["rx_data[63:0]\nrx_valid/rx_sof/rx_eof\nrx_eof_bytes\nmac_fcs_valid"]
     HOUT["payload_data[63:0]\npayload_valid/payload_sof/payload_eof\npayload_eof_bytes\nframe_err"]
-    FOUT["instrument_id[63:0]\nprice[63:0]\nquantity[31:0]\nside[7:0]\nfield_valid/field_err"]
+    FOUT["msg_type[15:0]\ninstrument_id[63:0]\nprice[63:0]\nquantity[31:0]\nside[7:0]\nfield_valid/field_err"]
     SOUT["symbol_idx\nsym_valid/sym_miss/sym_err"]
+    STROUT["order_symbol_idx/order_price\norder_quantity/order_side\norder_valid/order_suppress/order_err"]
     ROUT["risk_pass/risk_kill\nkill_reason/risk_err"]
     TX["pcs_txdata[63:0]\npcs_txctl[7:0]\npcs_tx_valid/sof/eof\npcs_tx_eof_bytes"]
 
-    RX --> MOUT --> HOUT --> FOUT --> SOUT --> ROUT --> TX
+    RX --> MOUT --> HOUT --> FOUT --> SOUT --> STROUT --> ROUT --> TX
     MOUT -.-> FCS
 ```
 
@@ -58,7 +60,8 @@ flowchart TB
 | `hdr_stripper` | Remove preamble plus fixed Ethernet/IPv4/UDP headers and align UDP payload. | Causal stream latency | Emits payload when enough header bytes have arrived; see spec gap below. |
 | `field_aligner` | Extract typed fields from static UDP payload offsets and byte-swap once. | 1-3 payload words | Current fields reach byte 23, so default layout completes on payload word 3. |
 | `sym_id_mapper` | Map 64-bit instrument ID to compact symbol index. | 1 cycle | Direct-mapped tag table loaded through off-path config pins. |
-| `risk_gate` | Evaluate price, quantity, global kill, symbol miss, and upstream error checks in parallel. | 1 cycle | Risk limits are loaded through off-path config pins; decision outputs remain mutually exclusive. |
+| `strategy_core` | Convert normalized market data into order intent (Stage-1 take-liquidity policy). | 1 cycle | Configured tradeable msg_type + per-symbol enable/side-policy/quantity table; every market update resolves to exactly one of order/suppress/error. Golden C++ model in `verif/` checked via DPI. |
+| `risk_gate` | Evaluate price, quantity, global kill, symbol miss, and upstream error checks in parallel on the strategy's order intent. | 1 cycle | Risk limits are loaded through off-path config pins; decision outputs remain mutually exclusive. |
 | `pkt_formatter` | Format approved tuple into a complete raw-PCS order frame. | 1 cycle to SOF | Emits ten 64-bit TX words: preamble/SFD, headers, order fields, FCS, terminate control word. In-flight frames are never truncated; `tx_abort` stomps the FCS instead. |
 | `hft_engine` | Integrate pipeline, align sideband fields, own late-FCS/kill policy. | N/A | Raw PCS RX/TX boundary. Late bad inbound FCS suppresses the pending launch or stomps the in-flight order; exposes kill reason, risk error, and drop/stomp counters. |
 
@@ -79,22 +82,26 @@ sequenceDiagram
     participant FA as field_aligner
     participant HFT as hft_engine sideband regs
     participant MAP as sym_id_mapper
+    participant STR as strategy_core
     participant RISK as risk_gate
     participant FMT as pkt_formatter
 
-    FA->>HFT: field_valid + price/quantity/side
+    FA->>HFT: field_valid + msg_type/price/quantity/side
     HFT->>MAP: instrument_id + field_valid
-    HFT->>RISK: sym-stage price/quantity/side
-    MAP->>RISK: symbol_idx + sym_valid/miss/err
+    MAP->>STR: symbol_idx + sym_valid/err
+    HFT->>STR: sym-stage msg_type/price/quantity/side
+    STR->>RISK: order intent (symbol/price/qty/side + valid/err)
+    HFT->>RISK: sym_miss delayed to the order-intent cycle
     RISK->>HFT: risk_pass/risk_kill
-    HFT->>FMT: risk-stage symbol/price/quantity/side
+    HFT->>FMT: risk-stage order symbol/price/quantity/side
     RISK->>FMT: risk decision
 ```
 
-`hft_engine` captures field sidebands when `field_valid` asserts. On the mapper
-valid cycle, it captures the mapped symbol and forwards the matching price,
-quantity, and side to the formatter stage. This prevents a pass/kill decision
-from being paired with stale or future order fields.
+`hft_engine` captures field sidebands when `field_valid` asserts, feeds them
+with the mapped symbol into `strategy_core` on the mapper valid cycle, and
+captures the strategy's order intent for the formatter stage. This keeps every
+pass/kill decision paired with exactly the order fields it judged, never stale
+or future values.
 
 ## Nominal Latency
 
@@ -105,15 +112,15 @@ The latest integrated smoke measurement at 156.25 MHz is:
 | `mac_sof` to `payload_sof` | 7 | 44.8 ns |
 | `payload_sof` to `field_valid` | 3 | 19.2 ns |
 | `field_valid` to `sym_valid` | 1 | 6.4 ns |
-| `sym_valid` to risk decision | 1 | 6.4 ns |
+| `sym_valid` to risk decision (through `strategy_core`) | 2 | 12.8 ns |
 | Risk decision to `tx_sof` | 1 | 6.4 ns |
-| `mac_sof` to `tx_sof` | 13 | 83.2 ns |
+| `mac_sof` to `tx_sof` | 14 | 89.6 ns |
 | `tx_sof` to `tx_eof` | 9 | 57.6 ns |
 
-The decision path after all fields are available is three cycles:
+The decision path after all fields are available is four cycles:
 
 ```text
-field_valid -> sym_valid -> risk_pass/risk_kill -> pcs_tx_sof
+field_valid -> sym_valid -> order_valid -> risk_pass/risk_kill -> pcs_tx_sof
 ```
 
 The larger `mac_sof` to `tx_sof` number is dominated by the causal need to
@@ -180,6 +187,7 @@ vectors in `tb_mac_shim` and `tb_pkt_formatter`.
 | `hdr_stripper_assertions.sv` | Payload SOF/EOF validity, bounded SOF-to-EOF completion, no-gap streaming, error suppression behavior. |
 | `field_aligner_assertions.sv` | Field valid/error relationship, default extraction correctness, propagated errors. |
 | `sym_id_mapper_assertions.sv` | One-cycle valid timing, config-backed index/tag behavior, tag miss, field error propagation. |
+| `strategy_core_assertions.sv` | Exactly-one-of order/suppress/error per market update, config-mirrored decision and field correctness, cfg_ready/init sweep tracking. |
 | `risk_gate_assertions.sv` | Pass/kill exclusivity, config-backed one-cycle decisions, global kill, kill reason encoding. |
 | `pkt_formatter_assertions.sv` | One-cycle launch, exactly one SOF per TX frame, no TX gaps, kill-at-launch-only (in-flight frames never truncate), preamble on SOF, terminate control on EOF, fixed 10-word frame length. |
 

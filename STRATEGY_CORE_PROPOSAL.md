@@ -1,9 +1,18 @@
 # Strategy Core Proposal
 
+> **Status (2026-07-12): Stage 1 IMPLEMENTED.** The pipeline insertion and the
+> minimal deterministic strategy described here were approved (see the
+> Architecture Decisions table in `BLOCK_CONTEXT.md`) and implemented as
+> `rtl/strategy_core.sv`, verified against the golden C++ model in `verif/`
+> (see `verif/README.md`). The configuration questions in this document were
+> answered by the recorded Stage-1 answer sheet. This file is retained as the
+> background rationale and as the staging roadmap for stages 2-4 (market
+> state, position/OMS, real feed support).
+
 This document describes where the quant/algorithm layer fits in the HFT RTL
-pipeline. It is a proposal, not an implemented RTL change. The current source
-spec does not define a strategy module, and `agents.md` says not to refactor
-pipeline boundaries without explicit instruction.
+pipeline. The original source spec does not define a strategy module; the
+insertion below was treated as an architectural change and explicitly
+approved before `hft_engine` was modified.
 
 ## Current Pipeline
 

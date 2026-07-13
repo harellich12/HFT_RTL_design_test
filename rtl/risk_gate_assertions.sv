@@ -36,6 +36,7 @@ module risk_gate_assertions #(
     logic [PRICE_WIDTH-1:0] price_floor_table [SYMBOL_TABLE_DEPTH];
     logic [PRICE_WIDTH-1:0] price_ceil_table [SYMBOL_TABLE_DEPTH];
     logic [QTY_WIDTH-1:0]   qty_max_table [SYMBOL_TABLE_DEPTH];
+    logic                   global_kill_meta_r;
     logic                   global_kill_r;
     logic [PRICE_WIDTH-1:0] price_floor_limit;
     logic [PRICE_WIDTH-1:0] price_ceil_limit;
@@ -54,11 +55,14 @@ module risk_gate_assertions #(
     // during the sweep are ignored and entries start at fail-safe limits.
     always_ff @(posedge clk_pcs) begin
         if (!rst_n) begin
+            global_kill_meta_r   <= 1'b0;
             global_kill_r        <= 1'b0;
             init_mirror_active_r <= 1'b1;
             init_mirror_idx_r    <= '0;
         end else begin
-            global_kill_r <= risk_global_kill;
+            // Mirror the bound module's two-stage kill synchronizer.
+            global_kill_meta_r <= risk_global_kill;
+            global_kill_r      <= global_kill_meta_r;
 
             if (init_mirror_active_r) begin
                 price_floor_table[init_mirror_idx_r] <= {PRICE_WIDTH{1'b1}};
